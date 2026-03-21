@@ -1,0 +1,296 @@
+{
+  "info": {
+    "_postman_id": "fatura-bot-api-collection",
+    "name": "Fatura Bot API",
+    "description": "Fatura Bot — Python FastAPI POS fiş analiz servisi\n\n## Base URL Yapısı\n- Tüm endpoint'ler: {{baseUrl}}/v1/...\n- baseUrl örnek: http://localhost:3000 (sonunda /v1 OLMADAN)\n\n## Özellikler\n- POS fiş görselini Gemini AI ile analiz etme\n- OCR ön-filtre ile maliyet tasarrufu\n- Otomatik Excel'e kaydetme (günlük dosyalar)\n- Bütçe takibi (TL bazlı aylık limit)\n- Chrome Extension entegrasyonu\n\n## Güvenlik\nTüm API endpoint'leri (health hariç) API Key gerektirir.\nHeader: X-API-Key: your_api_key\n\n## OCR-First Pipeline\n1. Görsel → OCR ön-filtre (Tesseract)\n2. Fiş değilse → reddedilir (Gemini çağrılmaz)\n3. OCR yeterliyse → direkt Excel'e yaz (Gemini atlanır)\n4. OCR yetersizse → Gemini AI'ya gönder",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{apiKey}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
+    { "key": "apiKey", "value": "Bg1fVHjSWGG3XEH0YAARH5YPUvWEItdyR8z28lbpDPxdj66QqR", "type": "string", "description": "API Key (.env → API_SECRET)" }
+  ],
+  "item": [
+    {
+      "name": "Health & Monitoring",
+      "description": "Sağlık kontrolü, istatistikler, bütçe ve kuyruk durumu.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "health"]
+            },
+            "description": "Servis sağlık durumu. Authentication gerektirmez.\n\nDönen bilgiler: status, gemini_budget_remaining, prefilter_status, excel_row_count, uptime_seconds, version"
+          },
+          "response": [
+            {
+              "name": "Healthy",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"status\": \"healthy\",\n  \"gemini_budget_remaining\": \"₺198.50 kaldı (~5500 fiş) | Bu ay: 42 fiş, ₺1.50\",\n  \"prefilter_status\": \"OCR-First aktif | OCR çözüm: 15 | Gemini fallback: 27 | Reddedilen: 3 | Tasarruf: ₺0.0540\",\n  \"excel_row_count\": 42,\n  \"uptime_seconds\": 3600,\n  \"version\": \"1.0.0\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Stats",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "stats"]
+            },
+            "description": "İşlem istatistikleri: toplam işlenen, hatalar, güven skoru ortalaması, işleme süresi, en çok fiş gelen mağazalar, OCR prefilter istatistikleri."
+          },
+          "response": [
+            {
+              "name": "Stats",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"total_processed\": 42,\n  \"total_errors\": 3,\n  \"today_processed\": 8,\n  \"average_confidence\": 87.5,\n  \"average_processing_ms\": 1250.0,\n  \"top_stores\": [\"BİM\", \"A101\", \"Migros\"],\n  \"prefilter_rejected\": 3,\n  \"prefilter_confirmed\": 15,\n  \"prefilter_uncertain\": 24,\n  \"prefilter_bypassed\": 0,\n  \"estimated_savings_tl\": 0.054\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Budget",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/budget",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "budget"]
+            },
+            "description": "Detaylı aylık Gemini API bütçe bilgisi. Kalan bütçe, tahmini kalan fiş sayısı, maliyet/fiş, OCR tasarruf miktarı."
+          },
+          "response": [
+            {
+              "name": "Budget Healthy",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"budget_tl\": 200.0,\n  \"month_cost_tl\": 1.5,\n  \"remaining_tl\": 198.5,\n  \"month_count\": 42,\n  \"estimated_remaining_receipts\": 5500,\n  \"est_cost_per_receipt_tl\": 0.036,\n  \"ocr_savings_tl\": 0.054,\n  \"usage_percentage\": 0.8,\n  \"status\": \"healthy\",\n  \"message\": \"₺198.50 kaldı (~5500 fiş)\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Get Queue Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/queue-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "queue-status"]
+            },
+            "description": "Kuyruk ve aktif işlem durumu. Eşzamanlı işlenen fiş sayısı, bekleyen ve son işlem sayısı."
+          },
+          "response": [
+            {
+              "name": "Queue Status",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"active_processing\": 0,\n  \"pending\": 0,\n  \"recent_count\": 12,\n  \"max_recent\": 50\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Processing",
+      "description": "Fiş görsel analizi — Ana işlem endpoint'i.",
+      "item": [
+        {
+          "name": "Process Receipt Image",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"image_base64\": \"{{testImageBase64}}\",\n  \"mime_type\": \"image/jpeg\",\n  \"sender\": \"postman-test\",\n  \"request_id\": \"test-001\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/process-image",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "process-image"]
+            },
+            "description": "POS fiş görselini analiz eder ve Excel'e kaydeder.\n\n**İş Akışı:**\n1. Base64 decode & boyut kontrolü (max 10MB)\n2. OCR ön-filtre: Fiş mi? Yeterli mi?\n3. Gemini AI analizi (gerekirse)\n4. Doğrulama & güven skoru\n5. Excel'e kaydet\n\n**Body:**\n- `image_base64` (zorunlu): Görselin base64 verisi\n- `mime_type` (zorunlu): image/jpeg, image/png, image/webp, image/heic\n- `sender` (opsiyonel): Gönderen kaynak (varsayılan: chrome-extension)\n- `request_id` (opsiyonel): İstek takip ID\n- `timestamp` (opsiyonel): Unix timestamp (ms)\n\n**Hata Kodları:**\n- `IMAGE_TOO_LARGE`: Görsel 10MB'dan büyük\n- `INVALID_BASE64`: Geçersiz base64\n- `NOT_A_RECEIPT`: Görsel POS fişi değil\n- `BUDGET_EXCEEDED`: Aylık bütçe doldu (429)\n- `RATE_LIMITED`: Gemini rate limit (429)\n- `GEMINI_UNAVAILABLE`: AI servisi erişilemez (503)"
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"row_number\": 5,\n  \"confidence\": 92,\n  \"source\": \"gemini\",\n  \"summary\": {\n    \"firma\": \"BİM\",\n    \"tarih\": \"15.03.2026\",\n    \"toplam\": 245.90,\n    \"masraf\": \"Market Alışverişi\",\n    \"odeme\": \"Nakit\"\n  },\n  \"excel_path\": \"public/daily\",\n  \"processing_time_ms\": 1830\n}"
+            },
+            {
+              "name": "Not a Receipt",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"success\": false,\n  \"error_code\": \"NOT_A_RECEIPT\",\n  \"message\": \"Gönderilen görsel bir POS fişi olarak tanınamadı\",\n  \"prefilter_score\": 12,\n  \"prefilter_detail\": \"OCR metin çok kısa, fiş anahtar kelimesi bulunamadı\"\n}"
+            },
+            {
+              "name": "Image Too Large",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"success\": false,\n  \"error_code\": \"IMAGE_TOO_LARGE\",\n  \"message\": \"Görsel çok büyük: 12.5MB (max 10MB)\"\n}"
+            },
+            {
+              "name": "Budget Exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error_code\": \"BUDGET_EXCEEDED\",\n  \"message\": \"Aylık bütçe doldu (₺200.00/₺200.00).\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"success\": false,\n  \"error_code\": \"UNAUTHORIZED\",\n  \"message\": \"Geçersiz veya eksik API anahtarı\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Export",
+      "description": "Excel dosyası dışa aktarma işlemleri.",
+      "item": [
+        {
+          "name": "Export Today's Excel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/export",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "export"]
+            },
+            "description": "Bugünkü Excel dosyasını indirir (.xlsx)."
+          },
+          "response": []
+        },
+        {
+          "name": "Export Excel by Date",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/export?date=2026-03-20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "export"],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-03-20",
+                  "description": "Tarih (YYYY-MM-DD formatında)"
+                }
+              ]
+            },
+            "description": "Belirli bir güne ait Excel dosyasını indirir.\n\nQuery: `date` — YYYY-MM-DD formatında (opsiyonel, varsayılan: bugün)"
+          },
+          "response": [
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"detail\": \"2026-03-20 tarihine ait Excel dosyası bulunamadı\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Export All Combined",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/export-all",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "export-all"]
+            },
+            "description": "Tüm günlük Excel dosyalarını tek bir dosyada birleştirip indirir (all_invoices.xlsx)."
+          },
+          "response": [
+            {
+              "name": "No Data",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"detail\": \"Hiç fatura kaydı bulunamadı\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "List Daily Files",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/daily-files",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "daily-files"]
+            },
+            "description": "Mevcut günlük Excel dosyalarını listeler. Dosya adları ve toplam sayı döner."
+          },
+          "response": [
+            {
+              "name": "File List",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"files\": [\n    \"2026-03-18.xlsx\",\n    \"2026-03-19.xlsx\",\n    \"2026-03-20.xlsx\"\n  ],\n  \"total\": 3\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Queries",
+      "description": "Son işlenen fiş sorgulama.",
+      "item": [
+        {
+          "name": "Get Recent Queries",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/recent-queries?limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1", "recent-queries"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "description": "Döndürülecek kayıt sayısı (1-50, varsayılan: 20)"
+                }
+              ]
+            },
+            "description": "Son işlenen fişlerin listesini döndürür.\n\nQuery: `limit` — 1-50 arası (varsayılan: 20)"
+          },
+          "response": [
+            {
+              "name": "Recent Queries",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"queries\": [\n    {\n      \"request_id\": \"abc12345\",\n      \"timestamp\": \"2026-03-20T14:30:00Z\",\n      \"firma\": \"BİM\",\n      \"toplam\": 245.90,\n      \"confidence\": 92,\n      \"source\": \"gemini\",\n      \"processing_time_ms\": 1830,\n      \"masraf\": \"Market Alışverişi\",\n      \"tarih\": \"15.03.2026\",\n      \"odeme\": \"Nakit\",\n      \"status\": \"success\"\n    }\n  ],\n  \"total\": 1,\n  \"limit\": 20\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+

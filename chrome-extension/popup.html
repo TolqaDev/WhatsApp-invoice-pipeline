@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=720, height=580">
+  <title>Fatura Bot Manager</title>
+  <link rel="stylesheet" href="styles/main.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+</head>
+<body>
+  <!-- ═══════ LOADING SCREEN ═══════ -->
+  <div id="loading-screen" class="loading-screen">
+    <div class="loading-content">
+      <div class="loading-logo">
+        <div class="loading-ring"></div>
+        <i class="fas fa-receipt"></i>
+      </div>
+      <div class="loading-text">Fatura Bot</div>
+      <div class="loading-subtitle">Manager</div>
+      <div class="loading-dots">
+        <span></span><span></span><span></span>
+      </div>
+      <div class="loading-status">Bağlantı kuruluyor...</div>
+    </div>
+  </div>
+
+  <!-- ═══════ MAIN APP ═══════ -->
+  <div id="app" class="app hidden">
+
+    <!-- ══ LEFT SIDEBAR ══ -->
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="sidebar-brand"><i class="fas fa-receipt"></i></div>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="sidebar-nav-item active" data-tab="dashboard" title="Panel">
+          <i class="fas fa-chart-pie"></i>
+          <span>Panel</span>
+        </button>
+        <button class="sidebar-nav-item" data-tab="process" title="Fiş İşle">
+          <i class="fas fa-camera"></i>
+          <span>Fiş İşle</span>
+        </button>
+        <button class="sidebar-nav-item" data-tab="queries" title="Sorgular">
+          <i class="fas fa-list-alt"></i>
+          <span>Sorgular</span>
+        </button>
+        <button class="sidebar-nav-item" data-tab="export" title="Dışa Aktar">
+          <i class="fas fa-file-excel"></i>
+          <span>Dışa Aktar</span>
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <button class="sidebar-nav-item sidebar-theme-btn" id="theme-toggle" title="Tema Değiştir">
+          <i class="fas fa-sun"></i>
+        </button>
+        <button class="sidebar-nav-item sidebar-bottom-btn" id="sidebar-api-settings" title="Sunucu Ayarları">
+          <i class="fas fa-cog"></i>
+        </button>
+      </div>
+    </aside>
+
+    <!-- ══ MAIN PANEL ══ -->
+    <div class="main-panel">
+
+      <!-- ── TOP BAR ── -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 id="page-title" class="topbar-title">Kontrol Paneli</h1>
+        </div>
+        <div class="topbar-right">
+          <div id="connection-status" class="conn-pill disconnected">
+            <span class="conn-dot"></span>
+            <span class="badge-text">Bağlı Değil</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ── CONTENT AREA ── -->
+      <main class="content-area">
+
+        <!-- ═══ SUNUCU AYARLARI MODAL ═══ -->
+        <div class="modal-backdrop hidden" id="api-modal-backdrop"></div>
+        <div class="modal hidden" id="api-modal">
+          <div class="modal-header">
+            <h3><i class="fas fa-server"></i> Sunucu Ayarları</h3>
+            <button class="modal-close" id="api-modal-close"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="modal-body">
+            <div class="modal-status" id="api-modal-status">
+              <span class="api-modal-status-dot" id="api-modal-status-dot"></span>
+              <span id="api-modal-status-text">Bağlantı durumu bilinmiyor</span>
+            </div>
+            <div class="field">
+              <label for="api-url"><i class="fas fa-server"></i> Sunucu Adresi</label>
+              <input type="text" id="api-url" placeholder="http://localhost:3000" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="api-key"><i class="fas fa-key"></i> API Anahtarı</label>
+              <div class="input-row">
+                <input type="password" id="api-key" placeholder="API_SECRET değeriniz">
+                <button type="button" class="input-icon-btn" id="toggle-api-key" title="Göster/Gizle">
+                  <i class="fas fa-eye"></i>
+                </button>
+              </div>
+            </div>
+            <div class="modal-add-actions">
+              <button id="test-connection" class="btn btn-outline btn-sm"><i class="fas fa-plug"></i> Bağlantıyı Test Et</button>
+              <button id="save-settings" class="btn btn-primary btn-sm"><i class="fas fa-save"></i> Kaydet</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════ PANEL SEKMESİ ═══════════════ -->
+        <section id="tab-dashboard" class="tab-content active">
+          <div class="dashboard" id="dashboard-view">
+            <!-- İstatistikler -->
+            <div class="dash-stats">
+              <div class="dash-stat-widget">
+                <div class="dash-stat-icon"><i class="fas fa-check-circle"></i></div>
+                <div class="dash-stat-body">
+                  <span class="dash-stat-value" id="stat-total-processed">0</span>
+                  <span class="dash-stat-label">Toplam İşlenen</span>
+                </div>
+              </div>
+              <div class="dash-stat-widget">
+                <div class="dash-stat-icon blue"><i class="fas fa-calendar-day"></i></div>
+                <div class="dash-stat-body">
+                  <span class="dash-stat-value" id="stat-today-processed">0</span>
+                  <span class="dash-stat-label">Bugün</span>
+                </div>
+              </div>
+              <div class="dash-stat-widget">
+                <div class="dash-stat-icon orange"><i class="fas fa-exclamation-triangle"></i></div>
+                <div class="dash-stat-body">
+                  <span class="dash-stat-value" id="stat-total-errors">0</span>
+                  <span class="dash-stat-label">Hata</span>
+                </div>
+              </div>
+              <div class="dash-stat-widget">
+                <div class="dash-stat-icon purple"><i class="fas fa-file-excel"></i></div>
+                <div class="dash-stat-body">
+                  <span class="dash-stat-value" id="stat-excel-rows">0</span>
+                  <span class="dash-stat-label">Excel Satır</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bütçe + Sistem Sağlığı -->
+            <div class="dash-grid-2">
+              <div class="dash-card">
+                <div class="dash-card-header">
+                  <h4><i class="fas fa-wallet"></i> Bütçe Durumu</h4>
+                  <button class="icon-btn-sm" id="refresh-budget" title="Yenile"><i class="fas fa-sync-alt"></i></button>
+                </div>
+                <div class="dash-card-body">
+                  <div class="health-row-full">
+                    <div class="health-item">
+                      <div class="health-ring">
+                        <svg viewBox="0 0 36 36">
+                          <path class="health-ring-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                          <path class="health-ring-fill" id="budget-ring" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        </svg>
+                        <span class="health-ring-text" id="budget-usage-pct">0%</span>
+                      </div>
+                      <span class="health-item-label">Kullanım</span>
+                    </div>
+                    <div class="health-meta">
+                      <div class="health-meta-row"><i class="fas fa-lira-sign"></i><span>Bütçe</span><strong id="budget-total">₺0</strong></div>
+                      <div class="health-meta-row"><i class="fas fa-coins"></i><span>Kalan</span><strong id="budget-remaining">₺0</strong></div>
+                      <div class="health-meta-row"><i class="fas fa-receipt"></i><span>Tahmini Kalan</span><strong id="budget-est-receipts">0 fiş</strong></div>
+                      <div class="health-meta-row"><i class="fas fa-piggy-bank"></i><span>OCR Tasarruf</span><strong id="budget-ocr-savings">₺0</strong></div>
+                      <div class="health-meta-row"><i class="fas fa-shield-alt"></i><span>Durum</span><span class="system-health-badge" id="budget-status">-</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-header">
+                  <h4><i class="fas fa-heartbeat"></i> Sistem Sağlığı</h4>
+                  <button class="icon-btn-sm" id="refresh-health" title="Yenile"><i class="fas fa-sync-alt"></i></button>
+                </div>
+                <div class="dash-card-body">
+                  <div class="health-meta-vertical">
+                    <div class="health-meta-row"><i class="fas fa-clock"></i><span>Çalışma Süresi</span><strong id="sys-uptime">-</strong></div>
+                    <div class="health-meta-row"><i class="fas fa-shield-alt"></i><span>Durum</span><span class="system-health-badge" id="sys-health">-</span></div>
+                    <div class="health-meta-row"><i class="fas fa-tachometer-alt"></i><span>Ort. Güven</span><strong id="stat-avg-confidence">0%</strong></div>
+                    <div class="health-meta-row"><i class="fas fa-stopwatch"></i><span>Ort. Süre</span><strong id="stat-avg-processing">0ms</strong></div>
+                    <div class="health-meta-row"><i class="fas fa-tasks"></i><span>Aktif İşlem</span><strong id="stat-active-processing">0</strong></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- OCR Hattı + En Çok İşlenen -->
+            <div class="dash-grid-2">
+              <div class="dash-card">
+                <div class="dash-card-header">
+                  <h4><i class="fas fa-filter"></i> OCR Hattı</h4>
+                </div>
+                <div class="dash-card-body">
+                  <div class="pipeline-stats">
+                    <div class="pipeline-item"><div class="pipeline-icon green"><i class="fas fa-check"></i></div><div class="pipeline-info"><span class="pipeline-label">OCR Yeterli</span><span class="pipeline-value" id="stat-ocr-confirmed">0</span></div></div>
+                    <div class="pipeline-item"><div class="pipeline-icon blue"><i class="fas fa-robot"></i></div><div class="pipeline-info"><span class="pipeline-label">Gemini Yedek</span><span class="pipeline-value" id="stat-ocr-uncertain">0</span></div></div>
+                    <div class="pipeline-item"><div class="pipeline-icon orange"><i class="fas fa-ban"></i></div><div class="pipeline-info"><span class="pipeline-label">Reddedilen</span><span class="pipeline-value" id="stat-ocr-rejected">0</span></div></div>
+                    <div class="pipeline-item"><div class="pipeline-icon purple"><i class="fas fa-forward"></i></div><div class="pipeline-info"><span class="pipeline-label">Atlanan</span><span class="pipeline-value" id="stat-ocr-bypassed">0</span></div></div>
+                  </div>
+                </div>
+              </div>
+              <div class="dash-card">
+                <div class="dash-card-header">
+                  <h4><i class="fas fa-store"></i> En Çok İşlenen</h4>
+                  <button class="icon-btn-sm" id="refresh-dashboard" title="Yenile"><i class="fas fa-sync-alt"></i></button>
+                </div>
+                <div class="dash-card-body">
+                  <div class="top-stores-list" id="top-stores-list">
+                    <div class="status-empty"><i class="fas fa-store"></i><span>Henüz veri yok</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════ FİŞ İŞLE SEKMESİ ═══════════════ -->
+        <section id="tab-process" class="tab-content">
+          <div class="process-layout">
+            <div class="process-form-panel">
+              <div class="process-form-header">
+                <div class="process-form-icon"><i class="fas fa-camera"></i></div>
+                <h3>Fiş Görselini Yükle</h3>
+                <p>POS fiş görselini sürükleyip bırakın veya tıklayarak seçin</p>
+              </div>
+              <div class="drop-zone" id="drop-zone">
+                <div class="drop-zone-content" id="drop-zone-content">
+                  <i class="fas fa-cloud-upload-alt"></i>
+                  <span>Görselleri sürükleyip bırakın</span>
+                  <span class="drop-zone-hint">veya tıklayarak seçin (birden fazla seçebilirsiniz)</span>
+                  <span class="drop-zone-hint">JPEG, PNG, WebP desteklenir • Maks 10 görsel</span>
+                  <input type="file" id="file-input" accept="image/jpeg,image/png,image/webp" multiple hidden>
+                </div>
+                <div class="drop-zone-preview hidden" id="drop-zone-preview">
+                  <div class="preview-grid" id="preview-grid"></div>
+                  <button class="btn btn-ghost btn-sm" id="clear-image"><i class="fas fa-times"></i> Tümünü Temizle</button>
+                </div>
+              </div>
+              <div class="queue-progress hidden" id="queue-progress">
+                <div class="queue-progress-bar"><div class="queue-progress-fill" id="queue-progress-fill"></div></div>
+                <span class="queue-progress-text" id="queue-progress-text">0/0 işleniyor...</span>
+              </div>
+              <button type="button" class="btn btn-primary btn-block btn-glow btn-process" id="process-btn" disabled>
+                <i class="fas fa-magic"></i> Fişi İşle
+              </button>
+            </div>
+            <div class="process-result-panel">
+              <div class="result-welcome" id="result-welcome">
+                <div class="welcome-blob"></div>
+                <div class="welcome-icon"><i class="fas fa-receipt"></i></div>
+                <h2>Fiş Analizi</h2>
+                <p>Fişi yükleyin, Gemini AI ile analiz edelim ve Excel'e kaydedelim</p>
+              </div>
+              <div class="result-processing hidden" id="result-processing">
+                <div class="processing-animation"><div class="processing-ring"></div><i class="fas fa-receipt"></i></div>
+                <p>Fiş analiz ediliyor...</p>
+                <span class="processing-hint">OCR → Gemini AI → Excel</span>
+              </div>
+              <div class="result-success hidden" id="result-success">
+                <div class="result-header">
+                  <div class="result-badge success"><i class="fas fa-check-circle"></i> Başarılı</div>
+                  <div class="result-meta">
+                    <span class="result-confidence" id="result-confidence">0%</span>
+                    <span class="result-source" id="result-source">gemini</span>
+                    <span class="result-time" id="result-time">0ms</span>
+                  </div>
+                </div>
+                <div class="result-card">
+                  <div class="result-row"><i class="fas fa-store"></i><span>Firma</span><strong id="res-firma">-</strong></div>
+                  <div class="result-row"><i class="fas fa-calendar"></i><span>Tarih</span><strong id="res-tarih">-</strong></div>
+                  <div class="result-row"><i class="fas fa-calculator"></i><span>Matrah</span><strong id="res-matrah">₺0</strong></div>
+                  <div class="result-row"><i class="fas fa-percentage"></i><span>KDV Oranı</span><strong id="res-kdv-oran">-</strong></div>
+                  <div class="result-row"><i class="fas fa-coins"></i><span>KDV Tutarı</span><strong id="res-kdv-tutar">₺0</strong></div>
+                  <div class="result-row"><i class="fas fa-lira-sign"></i><span>Toplam</span><strong id="res-toplam">₺0</strong></div>
+                  <div class="result-row"><i class="fas fa-tag"></i><span>Masraf</span><strong id="res-masraf">-</strong></div>
+                  <div class="result-row"><i class="fas fa-credit-card"></i><span>Ödeme</span><strong id="res-odeme">-</strong></div>
+                  <div class="result-row"><i class="fas fa-file-excel"></i><span>Excel Satır</span><strong id="res-row">-</strong></div>
+                </div>
+              </div>
+              <!-- Batch sonuç özeti -->
+              <div class="result-batch hidden" id="result-batch">
+                <div class="result-header">
+                  <div class="result-badge success"><i class="fas fa-layer-group"></i> Toplu İşlem Tamamlandı</div>
+                </div>
+                <div class="batch-summary" id="batch-summary"></div>
+              </div>
+              <div class="result-error hidden" id="result-error">
+                <div class="result-badge error"><i class="fas fa-exclamation-circle"></i> Hata</div>
+                <div class="result-error-msg" id="result-error-msg">Bir hata oluştu</div>
+                <div class="result-error-detail" id="result-error-detail"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════ SORGULAR SEKMESİ ═══════════════ -->
+        <section id="tab-queries" class="tab-content">
+          <div class="queries-layout">
+            <div class="queries-toolbar">
+              <div class="search-box"><i class="fas fa-search"></i><input type="text" id="queries-search" placeholder="Firma ara..."></div>
+              <div class="queries-date-filter">
+                <input type="date" id="queries-date-from" title="Başlangıç tarihi" class="queries-date-input">
+                <span class="queries-date-sep">—</span>
+                <input type="date" id="queries-date-to" title="Bitiş tarihi" class="queries-date-input">
+              </div>
+              <button class="icon-btn accent" id="refresh-queries" title="Yenile"><i class="fas fa-sync-alt"></i></button>
+            </div>
+            <div class="queries-table-wrapper">
+              <table class="queries-table" id="queries-table">
+                <thead><tr><th>Firma</th><th>Tarih</th><th>Toplam</th><th>KDV</th><th>Güven</th><th>Kaynak</th><th>Süre</th><th>Durum</th></tr></thead>
+                <tbody id="queries-tbody"></tbody>
+              </table>
+              <div class="queries-empty" id="queries-empty"><i class="fas fa-list-alt"></i><p>Henüz işlenmiş fiş yok</p></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════ DIŞA AKTAR SEKMESİ ═══════════════ -->
+        <section id="tab-export" class="tab-content">
+          <div class="export-layout">
+            <!-- Hızlı İşlem Kartları -->
+            <div class="export-action-cards">
+              <div class="export-action-card" id="export-today-btn">
+                <div class="export-card-icon"><i class="fas fa-calendar-day"></i></div>
+                <div class="export-card-body">
+                  <strong>Bugünü İndir</strong>
+                  <span>Günlük Excel dosyası</span>
+                </div>
+                <i class="fas fa-download export-card-arrow"></i>
+              </div>
+              <div class="export-action-card" id="export-all-btn">
+                <div class="export-card-icon purple"><i class="fas fa-layer-group"></i></div>
+                <div class="export-card-body">
+                  <strong>Tümünü Birleştir</strong>
+                  <span>Tek dosyada indir</span>
+                </div>
+                <i class="fas fa-download export-card-arrow"></i>
+              </div>
+            </div>
+
+            <!-- Tarih Seçerek İndirme -->
+            <div class="export-date-card">
+              <div class="export-date-card-header">
+                <i class="fas fa-calendar-alt"></i>
+                <span>Tarihe Göre İndir</span>
+              </div>
+              <div class="export-date-row">
+                <input type="date" id="export-date" class="export-date-input">
+                <button class="btn btn-primary btn-sm" id="export-date-btn"><i class="fas fa-download"></i> İndir</button>
+              </div>
+            </div>
+
+            <!-- Günlük Dosyalar -->
+            <div class="export-files-section">
+              <div class="export-files-header">
+                <h4><i class="fas fa-folder-open"></i> Günlük Dosyalar</h4>
+                <button class="icon-btn-sm" id="refresh-files" title="Yenile"><i class="fas fa-sync-alt"></i></button>
+              </div>
+              <div class="daily-files-list" id="daily-files-list">
+                <div class="status-empty"><i class="fas fa-folder-open"></i><span>Dosya bulunamadı</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <!-- ═══ SORGU DETAY POPUP ═══ -->
+    <div class="detail-backdrop hidden" id="detail-backdrop"></div>
+    <div class="detail-modal hidden" id="detail-modal">
+      <div class="detail-modal-header">
+        <h3><i class="fas fa-receipt"></i> Fiş Detayı</h3>
+        <button class="modal-close" id="detail-modal-close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="detail-modal-body" id="detail-modal-body">
+        <!-- JS ile doldurulacak -->
+      </div>
+    </div>
+
+    <!-- Onay Diyaloğu -->
+    <div class="confirm-backdrop hidden" id="confirm-backdrop"></div>
+    <div class="confirm-dialog hidden" id="confirm-dialog">
+      <div class="confirm-icon"><i class="fas fa-exclamation-triangle"></i></div>
+      <p class="confirm-message" id="confirm-message">Emin misiniz?</p>
+      <div class="confirm-actions">
+        <button class="btn btn-outline btn-sm" id="confirm-cancel-btn">İptal</button>
+        <button class="btn btn-primary btn-sm" id="confirm-ok-btn">Evet</button>
+      </div>
+    </div>
+
+    <!-- Bildirim -->
+    <div id="toast-container" class="toast-container"></div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
+

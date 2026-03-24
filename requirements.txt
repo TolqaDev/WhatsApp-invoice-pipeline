@@ -7,6 +7,12 @@ python-dotenv>=1.0.1
 aiofiles>=23.2.1
 httpx>=0.27.0
 
+# Legacy XLS format desteği
+xlwt>=1.3.0
+
+# LUCA Muhasebe Dönüştürücü
+pandas>=2.2.0
+
 # OCR Ön-filtre (2-Aşamalı Doğrulama)
 Pillow>=10.0.0
 pytesseract>=0.3.10

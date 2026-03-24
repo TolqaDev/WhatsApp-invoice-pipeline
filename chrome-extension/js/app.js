@@ -8,10 +8,12 @@ class FaturaBotApp {
       currentTab: 'dashboard',
       selectedFiles: [],
       isProcessing: false,
+      waPollingInterval: null,
+      waConnection: 'disconnected',
     };
   }
 
-  /* ═══════════════ BAŞLATMA ═══════════════ */
+  /* BAŞLATMA */
   async init() {
     try {
       await api.init();
@@ -65,10 +67,11 @@ class FaturaBotApp {
   async loadSettings() {
     const settings = await api.getSettings();
     document.getElementById('api-url').value = settings.apiUrl;
+    document.getElementById('wa-url').value = settings.waUrl;
     document.getElementById('api-key').value = settings.apiKey;
   }
 
-  /* ═══════════════ TEMA ═══════════════ */
+  /* TEMA */
   async loadTheme() {
     return new Promise((resolve) => {
       chrome.storage.local.get(['theme'], (result) => {
@@ -93,7 +96,7 @@ class FaturaBotApp {
     if (icon) icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
   }
 
-  /* ═══════════════ BAĞLANTI DURUMU ═══════════════ */
+  /* BAĞLANTI DURUMU */
   updateConnectionUI(connected) {
     const badge = document.getElementById('connection-status');
     const badgeText = badge.querySelector('.badge-text');
@@ -128,7 +131,7 @@ class FaturaBotApp {
     }
   }
 
-  /* ═══════════════ OLAY DİNLEYİCİLERİ ═══════════════ */
+  /* OLAY DİNLEYİCİLERİ */
   setupEventListeners() {
     // Kenar çubuğu
     document.querySelectorAll('.sidebar-nav-item[data-tab]').forEach(item => {
@@ -166,11 +169,36 @@ class FaturaBotApp {
     document.getElementById('detail-modal-close')?.addEventListener('click', () => this.closeDetailModal());
     document.getElementById('detail-backdrop')?.addEventListener('click', () => this.closeDetailModal());
 
-    // Dışa Aktar
-    document.getElementById('export-today-btn')?.addEventListener('click', () => this.exportToday());
-    document.getElementById('export-all-btn')?.addEventListener('click', () => this.exportAllCombined());
+    // Dışa Aktar — dropdown toggle
+    document.getElementById('export-today-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleExportDropdown('export-today-btn', 'export-today-dropdown');
+    });
+    document.getElementById('export-all-btn')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleExportDropdown('export-all-btn', 'export-all-dropdown');
+    });
+
+    // Dropdown format seçimleri
+    document.getElementById('export-today-dropdown')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.export-dropdown-item');
+      if (item) { this.exportToday(item.dataset.format); this.closeAllExportDropdowns(); }
+    });
+    document.getElementById('export-all-dropdown')?.addEventListener('click', (e) => {
+      const item = e.target.closest('.export-dropdown-item');
+      if (item) { this.exportAllCombined(item.dataset.format); this.closeAllExportDropdowns(); }
+    });
+
+    // Dışarı tıklanınca dropdown'ları kapat
+    document.addEventListener('click', () => this.closeAllExportDropdowns());
+
     document.getElementById('export-date-btn')?.addEventListener('click', () => this.exportByDate());
     document.getElementById('refresh-files')?.addEventListener('click', () => this.loadDailyFiles());
+
+    // WhatsApp
+    document.getElementById('wa-refresh-status')?.addEventListener('click', () => this.loadWhatsAppTab());
+    document.getElementById('wa-restart-btn')?.addEventListener('click', () => this.whatsAppRestart());
+    document.getElementById('wa-logout-btn')?.addEventListener('click', () => this.whatsAppLogout());
   }
   setupProcessListeners() {
     const dropZone = document.getElementById('drop-zone');
@@ -208,7 +236,7 @@ class FaturaBotApp {
     document.getElementById('process-btn')?.addEventListener('click', () => this.processQueue());
   }
 
-  /* ═══════════════ SEKME GEÇİŞİ ═══════════════ */
+  /* SEKME GEÇİŞİ */
   switchTab(tabId) {
     if (!this.state.apiReady && tabId !== 'dashboard') {
       utils.toast('Önce sunucu bağlantısını yapılandırın', 'warning');
@@ -222,18 +250,26 @@ class FaturaBotApp {
       tab.classList.toggle('active', tab.id === `tab-${tabId}`);
     });
 
-    const titles = { 'dashboard': 'Kontrol Paneli', 'process': 'Fiş İşle', 'queries': 'Son Sorgular', 'export': 'Dışa Aktar' };
+    const titles = { 'dashboard': 'Kontrol Paneli', 'process': 'Fiş İşle', 'queries': 'Son Sorgular', 'export': 'Dışa Aktar', 'whatsapp': 'WhatsApp' };
     document.getElementById('page-title').textContent = titles[tabId] || tabId;
     this.state.currentTab = tabId;
+
+    // WhatsApp polling yönetimi
+    if (tabId === 'whatsapp') {
+      this.startWhatsAppPolling();
+    } else {
+      this.stopWhatsAppPolling();
+    }
 
     switch (tabId) {
       case 'dashboard': this.loadDashboardData(); break;
       case 'queries': this.loadQueries(); break;
       case 'export': this.loadDailyFiles(); break;
+      case 'whatsapp': this.loadWhatsAppTab(); break;
     }
   }
 
-  /* ═══════════════ SUNUCU AYARLARI MODALI ═══════════════ */
+  /* SUNUCU AYARLARI MODALI */
   openApiModal() {
     const modal = document.getElementById('api-modal');
     const backdrop = document.getElementById('api-modal-backdrop');
@@ -286,8 +322,9 @@ class FaturaBotApp {
 
   async testConnection() {
     const url = document.getElementById('api-url').value.trim();
+    const waUrl = document.getElementById('wa-url').value.trim();
     const key = document.getElementById('api-key').value.trim();
-    if (!url) { utils.toast('Sunucu adresi girin', 'warning'); return; }
+    if (!url) { utils.toast('Python API adresi girin', 'warning'); return; }
 
     utils.setLoading('test-connection', true, 'Test ediliyor...');
     try {
@@ -298,19 +335,33 @@ class FaturaBotApp {
       const response = await fetch(`${normalizedUrl}/v1/health`, { headers, signal: AbortSignal.timeout(10000) });
       const data = await response.json();
 
-      if (data.status === 'healthy') {
-        await api.saveSettings(url, key);
-        this.state.apiReady = true;
-        this.updateConnectionUI(true);
-        this.updateApiModalStatus();
-        const closeBtn = document.getElementById('api-modal-close');
-        if (closeBtn) closeBtn.style.display = '';
-        utils.toast(`Bağlantı başarılı! v${data.version}`, 'success');
-        this.closeApiModal();
-        this.loadDashboardData();
-      } else {
-        utils.toast('Sunucu yanıt verdi ama durum sağlıklı değil', 'warning');
+      if (data.status !== 'healthy') {
+        utils.toast('Python API yanıt verdi ama durum sağlıklı değil', 'warning');
+        return;
       }
+
+      let waOk = false;
+      if (waUrl) {
+        try {
+          const normalizedWaUrl = waUrl.replace(/\/+$/, '');
+          const waHeaders = { 'Content-Type': 'application/json' };
+          if (key) waHeaders['X-API-Key'] = key;
+          const waResp = await fetch(`${normalizedWaUrl}/status`, { headers: waHeaders, signal: AbortSignal.timeout(5000) });
+          if (waResp.ok) waOk = true;
+        } catch { /* bridge kapalı olabilir  */ }
+      }
+
+      await api.saveSettings(url, waUrl || 'http://localhost:3001', key);
+      this.state.apiReady = true;
+      this.updateConnectionUI(true);
+      this.updateApiModalStatus();
+      const closeBtn = document.getElementById('api-modal-close');
+      if (closeBtn) closeBtn.style.display = '';
+
+      const waMsg = waOk ? ' · WP köprüsü ✓' : (waUrl ? ' · WP köprüsü ✗' : '');
+      utils.toast(`Python API bağlı! v${data.version}${waMsg}`, 'success');
+      this.closeApiModal();
+      this.loadDashboardData();
     } catch (e) {
       utils.toast('Bağlantı başarısız: ' + e.message, 'error');
     } finally {
@@ -320,17 +371,17 @@ class FaturaBotApp {
 
   async saveSettings() {
     const url = document.getElementById('api-url').value.trim();
+    const waUrl = document.getElementById('wa-url').value.trim() || 'http://localhost:3001';
     const key = document.getElementById('api-key').value.trim();
-    if (!url) { utils.toast('Sunucu adresi gerekli', 'warning'); return; }
+    if (!url) { utils.toast('Python API adresi gerekli', 'warning'); return; }
 
     utils.setLoading('save-settings', true, 'Kaydediliyor...');
     try {
-      await api.saveSettings(url, key);
+      await api.saveSettings(url, waUrl, key);
       await api.getHealth();
       this.state.apiReady = true;
       this.updateConnectionUI(true);
       this.updateApiModalStatus();
-      // Close butonunu tekrar göster
       const closeBtn = document.getElementById('api-modal-close');
       if (closeBtn) closeBtn.style.display = '';
       utils.toast('Ayarlar kaydedildi ve bağlantı kuruldu!', 'success');
@@ -346,7 +397,7 @@ class FaturaBotApp {
     }
   }
 
-  /* ═══════════════ PANEL ═══════════════ */
+  /* PANEL */
   async loadDashboardData() {
     if (!this.state.apiReady) return;
     await Promise.allSettled([
@@ -426,7 +477,7 @@ class FaturaBotApp {
     } catch (e) { console.error('Kuyruk hatası:', e); }
   }
 
-  /* ═══════════════ FİŞ İŞLE ═══════════════ */
+  /* FİŞ İŞLE */
   addSelectedFiles(files) {
     const MAX_FILES = 10;
     const remaining = MAX_FILES - this.state.selectedFiles.length;
@@ -586,7 +637,7 @@ class FaturaBotApp {
     utils.show('result-processing');
   }
 
-  /* ═══════════════ BACKGROUND KUYRUK YÖNETİMİ ═══════════════ */
+  /* BACKGROUND KUYRUK YÖNETİMİ */
 
   /**
    * Background SW'den gelen ilerleme mesajlarını dinle
@@ -927,7 +978,7 @@ class FaturaBotApp {
     else detailEl.textContent = '';
   }
 
-  /* ═══════════════ SORGULAR ═══════════════ */
+  /* SORGULAR */
   async loadQueries() {
     if (!this.state.apiReady) return;
     try {
@@ -1002,7 +1053,7 @@ class FaturaBotApp {
     this.renderQueries(filtered);
   }
 
-  /* ═══════════════ SORGU DETAY POPUP ═══════════════ */
+  /* SORGU DETAY POPUP */
   openDetailModal(query, idx) {
     this._editingQueryIdx = idx;
     this._editingQuery = { ...query };
@@ -1127,7 +1178,7 @@ class FaturaBotApp {
     }
   }
 
-  /* ═══════════════ DIŞA AKTAR ═══════════════ */
+  /* DIŞA AKTAR */
   async loadDailyFiles() {
     if (!this.state.apiReady) return;
     try {
@@ -1158,33 +1209,87 @@ class FaturaBotApp {
             <span>${utils.escapeHtml(fileName)}</span>
           </div>
         </div>
-        <button class="daily-file-download" data-date="${dateStr}" title="İndir"><i class="fas fa-download"></i></button>
+        <div class="daily-file-actions">
+          <button class="daily-file-download" data-date="${dateStr}" title="İndir"><i class="fas fa-download"></i></button>
+          <div class="daily-file-dropdown hidden" data-date="${dateStr}">
+            <button class="daily-file-dropdown-item" data-format="xlsx"><i class="fas fa-file-excel" style="color:#21a366"></i> XLSX</button>
+            <button class="daily-file-dropdown-item" data-format="csv"><i class="fas fa-file-csv" style="color:#f59e0b"></i> CSV</button>
+            <button class="daily-file-dropdown-item" data-format="xls"><i class="fas fa-file-alt" style="color:#6366f1"></i> XLS</button>
+          </div>
+        </div>
       </div>`;
     }).join('');
 
+    // Günlük dosya indirme dropdown toggle
     container.querySelectorAll('.daily-file-download').forEach(btn => {
-      btn.addEventListener('click', () => this.exportByDateValue(btn.dataset.date));
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dateVal = btn.dataset.date;
+        const dropdown = container.querySelector(`.daily-file-dropdown[data-date="${dateVal}"]`);
+        // Diğer açık dropdown'ları kapat
+        container.querySelectorAll('.daily-file-dropdown').forEach(d => {
+          if (d !== dropdown) d.classList.add('hidden');
+        });
+        dropdown.classList.toggle('hidden');
+      });
+    });
+
+    // Günlük dosya format seçimi
+    container.querySelectorAll('.daily-file-dropdown-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dropdown = item.closest('.daily-file-dropdown');
+        const dateVal = dropdown.dataset.date;
+        const fmt = item.dataset.format;
+        dropdown.classList.add('hidden');
+        this.exportByDateValue(dateVal, fmt);
+      });
     });
   }
 
-  async exportToday() {
+  /* Export Dropdown Yardımcıları */
+  toggleExportDropdown(btnId, dropdownId) {
+    const btn = document.getElementById(btnId);
+    const dropdown = document.getElementById(dropdownId);
+    const isOpen = !dropdown.classList.contains('hidden');
+
+    // Tüm dropdown'ları kapat
+    this.closeAllExportDropdowns();
+
+    if (!isOpen) {
+      dropdown.classList.remove('hidden');
+      btn.classList.add('dropdown-open');
+    }
+  }
+
+  closeAllExportDropdowns() {
+    document.querySelectorAll('.export-dropdown').forEach(d => d.classList.add('hidden'));
+    document.querySelectorAll('.export-action-card').forEach(c => c.classList.remove('dropdown-open'));
+    document.querySelectorAll('.daily-file-dropdown').forEach(d => d.classList.add('hidden'));
+  }
+
+  _fmtExt(format) { return { xlsx: '.xlsx', csv: '.csv', xls: '.xls' }[format] || '.xlsx'; }
+
+  async exportToday(format = 'xlsx') {
     const card = document.getElementById('export-today-btn');
     if (card) card.style.opacity = '0.5';
     try {
-      const response = await api.exportExcel();
-      await utils.downloadBlob(response, `faturalar_${new Date().toISOString().split('T')[0]}.xlsx`);
-      utils.toast('Bugünkü dosya indirildi', 'success');
+      const response = await api.exportExcel(null, format);
+      const ext = this._fmtExt(format);
+      await utils.downloadBlob(response, `fis_aktarim_${new Date().toISOString().split('T')[0]}${ext}`);
+      utils.toast(`Bugünkü dosya indirildi (${format.toUpperCase()})`, 'success');
     } catch (e) { utils.toast('İndirme hatası: ' + e.message, 'error'); }
     finally { if (card) card.style.opacity = ''; }
   }
 
-  async exportAllCombined() {
+  async exportAllCombined(format = 'xlsx') {
     const card = document.getElementById('export-all-btn');
     if (card) card.style.opacity = '0.5';
     try {
-      const response = await api.exportAll();
-      await utils.downloadBlob(response, 'tum_faturalar.xlsx');
-      utils.toast('Birleşik dosya indirildi', 'success');
+      const response = await api.exportAll(format);
+      const ext = this._fmtExt(format);
+      await utils.downloadBlob(response, `tum_fis_aktarim${ext}`);
+      utils.toast(`Birleşik dosya indirildi (${format.toUpperCase()})`, 'success');
     } catch (e) { utils.toast('İndirme hatası: ' + e.message, 'error'); }
     finally { if (card) card.style.opacity = ''; }
   }
@@ -1192,19 +1297,252 @@ class FaturaBotApp {
   async exportByDate() {
     const dateStr = document.getElementById('export-date').value;
     if (!dateStr) { utils.toast('Lütfen bir tarih seçin', 'warning'); return; }
-    await this.exportByDateValue(dateStr);
+    const format = document.getElementById('export-date-format')?.value || 'xlsx';
+    await this.exportByDateValue(dateStr, format);
   }
 
-  async exportByDateValue(dateStr) {
+  async exportByDateValue(dateStr, format = 'xlsx') {
     try {
-      const response = await api.exportExcel(dateStr);
-      await utils.downloadBlob(response, `faturalar_${dateStr}.xlsx`);
-      utils.toast(`${dateStr} dosyası indirildi`, 'success');
+      const response = await api.exportExcel(dateStr, format);
+      const ext = this._fmtExt(format);
+      await utils.downloadBlob(response, `fis_aktarim_${dateStr}${ext}`);
+      utils.toast(`${dateStr} dosyası indirildi (${format.toUpperCase()})`, 'success');
     } catch (e) { utils.toast('İndirme hatası: ' + e.message, 'error'); }
+  }
+
+  /* WHATSAPP */
+
+  async loadWhatsAppTab() {
+    try {
+      const status = await api.getWhatsAppStatus();
+      this.state.waConnection = status.connection || 'disconnected';
+      this.updateWhatsAppStatusUI(status);
+
+      if (status.connection === 'connected') {
+        this.showWhatsAppConnected(status);
+      } else {
+        // Bağlı değilse "WhatsApp Bağlı" mesajını mutlaka gizle
+        this.hideWhatsAppConnected();
+        await this.loadWhatsAppQR();
+      }
+    } catch (e) {
+      this.state.waConnection = 'disconnected';
+      this.updateWhatsAppStatusUI({ connection: 'disconnected' });
+      this.hideWhatsAppConnected();
+      this.showWhatsAppQRPlaceholder('Köprü bağlantısı kurulamadı');
+    }
+  }
+
+  updateWhatsAppStatusUI(status) {
+    const iconEl = document.getElementById('wa-status-icon');
+    const titleEl = document.getElementById('wa-status-title');
+    const badgeEl = document.getElementById('wa-status-badge');
+    const phoneEl = document.getElementById('wa-phone');
+    const uptimeEl = document.getElementById('wa-uptime');
+    const lastEl = document.getElementById('wa-last-processed');
+    const jidEl = document.getElementById('wa-allowed-jids');
+    const restartBtn = document.getElementById('wa-restart-btn');
+    const logoutBtn = document.getElementById('wa-logout-btn');
+
+    const conn = status.connection || 'disconnected';
+    const isConnected = conn === 'connected';
+    const isDisconnected = conn === 'disconnected';
+
+    // Badge
+    badgeEl.className = 'wa-status-badge ' + conn;
+    const labels = {
+      connected: '● Bağlı',
+      disconnected: '○ Bağlı Değil',
+      qr_pending: '◌ QR Bekleniyor',
+      connecting: '◌ Bağlanıyor...',
+    };
+    badgeEl.textContent = labels[conn] || conn;
+
+    // Icon
+    iconEl.className = 'wa-status-icon';
+    if (isConnected) iconEl.classList.add('connected');
+    else if (isDisconnected) iconEl.classList.add('disconnected');
+
+    // Title
+    titleEl.textContent = isConnected ? 'WhatsApp Bağlı' : 'WhatsApp Bağlantısı';
+
+    // Details
+    phoneEl.textContent = status.phoneNumber ? `+${status.phoneNumber}` : '-';
+    uptimeEl.textContent = status.uptimeFormatted || '-';
+    lastEl.textContent = status.lastProcessedAt
+      ? new Date(status.lastProcessedAt).toLocaleTimeString('tr-TR')
+      : '-';
+    jidEl.textContent = status.allowedJids?.length
+      ? status.allowedJids.map(j => j.replace('@s.whatsapp.net', '')).join(', ')
+      : 'Hepsi';
+
+    // Buton durumları
+    restartBtn.innerHTML = isConnected
+      ? '<i class="fas fa-redo"></i> Yeniden Bağlan'
+      : '<i class="fas fa-plug"></i> Bağlan';
+
+    logoutBtn.disabled = !isConnected;
+    logoutBtn.style.opacity = isConnected ? '' : '0.4';
+    logoutBtn.style.pointerEvents = isConnected ? '' : 'none';
+  }
+
+  async loadWhatsAppQR() {
+    const qrCard = document.getElementById('wa-qr-card');
+    const qrImage = document.getElementById('wa-qr-image');
+    const placeholder = document.getElementById('wa-qr-placeholder');
+
+    qrCard.classList.remove('connected-state');
+
+    try {
+      const data = await api.getWhatsAppQR();
+
+      if (data.connection === 'connected') {
+        this.showWhatsAppConnected(data);
+        return;
+      }
+
+      if (data.success && data.qr) {
+        qrImage.src = data.qr;
+        qrImage.classList.remove('hidden');
+        placeholder.classList.add('hidden');
+      } else {
+        this.showWhatsAppQRPlaceholder(data.message || 'QR kod bekleniyor...');
+      }
+    } catch (e) {
+      this.showWhatsAppQRPlaceholder('QR kod alınamadı');
+    }
+  }
+
+  showWhatsAppQRPlaceholder(message) {
+    const qrImage = document.getElementById('wa-qr-image');
+    const placeholder = document.getElementById('wa-qr-placeholder');
+    const qrCard = document.getElementById('wa-qr-card');
+
+    qrCard.classList.remove('connected-state');
+    qrImage.classList.add('hidden');
+    placeholder.classList.remove('hidden');
+    placeholder.querySelector('p').textContent = message || 'QR kod yükleniyor...';
+    this.hideWhatsAppConnected();
+  }
+
+  hideWhatsAppConnected() {
+    const connMsg = document.querySelector('.wa-connected-msg');
+    if (connMsg) connMsg.style.display = 'none';
+  }
+
+  showWhatsAppConnected(status) {
+    const qrCard = document.getElementById('wa-qr-card');
+    const qrImage = document.getElementById('wa-qr-image');
+    const placeholder = document.getElementById('wa-qr-placeholder');
+    const body = document.getElementById('wa-qr-body');
+
+    qrCard.classList.add('connected-state');
+    qrImage.classList.add('hidden');
+    placeholder.classList.add('hidden');
+
+    // Connected mesajı göster
+    let connMsg = body.querySelector('.wa-connected-msg');
+    if (!connMsg) {
+      connMsg = document.createElement('div');
+      connMsg.className = 'wa-connected-msg';
+      connMsg.innerHTML = `
+        <i class="fas fa-check-circle"></i>
+        <p>WhatsApp Bağlı</p>
+        <span></span>
+      `;
+      body.appendChild(connMsg);
+    }
+    connMsg.style.display = '';
+    const phone = status.phoneNumber ? `+${status.phoneNumber}` : '';
+    connMsg.querySelector('span').textContent = phone ? `${phone} numarası ile aktif` : 'Oturum aktif';
+  }
+
+  startWhatsAppPolling() {
+    this.stopWhatsAppPolling();
+    // İlk yüklemeyi yap, sonra 5 saniyede bir güncelle (QR değişebilir)
+    this.state.waPollingInterval = setInterval(() => {
+      if (this.state.currentTab === 'whatsapp') {
+        this.loadWhatsAppTab();
+      }
+    }, 5000);
+  }
+
+  stopWhatsAppPolling() {
+    if (this.state.waPollingInterval) {
+      clearInterval(this.state.waPollingInterval);
+      this.state.waPollingInterval = null;
+    }
+  }
+
+  async whatsAppRestart() {
+    const isConnected = this.state.waConnection === 'connected';
+    const msg = isConnected
+      ? 'WhatsApp bağlantısını yeniden başlatmak istiyor musunuz?'
+      : 'WhatsApp bağlantısını başlatmak istiyor musunuz?';
+    const ok = await this.showConfirm(msg);
+    if (!ok) return;
+
+    utils.setLoading('wa-restart-btn', true, 'Bağlanıyor...');
+    try {
+      await api.whatsAppRestart();
+      utils.toast(isConnected ? 'WhatsApp yeniden başlatılıyor...' : 'WhatsApp bağlanıyor...', 'info');
+      setTimeout(() => this.loadWhatsAppTab(), 2000);
+    } catch (e) {
+      utils.toast('Yeniden başlatma hatası: ' + e.message, 'error');
+    } finally {
+      utils.setLoading('wa-restart-btn', false);
+    }
+  }
+
+  async whatsAppLogout() {
+    const ok = await this.showConfirm('WhatsApp oturumunu kapatmak istiyor musunuz?\nTekrar QR kod taramanız gerekecek.');
+    if (!ok) return;
+
+    utils.setLoading('wa-logout-btn', true, 'Çıkış yapılıyor...');
+    try {
+      await api.whatsAppLogout();
+      utils.toast('WhatsApp oturumu kapatıldı', 'success');
+      this.state.waConnection = 'disconnected';
+      this.updateWhatsAppStatusUI({ connection: 'disconnected' });
+      this.hideWhatsAppConnected();
+      this.showWhatsAppQRPlaceholder('Oturum kapatıldı — yeniden bağlanın');
+    } catch (e) {
+      utils.toast('Çıkış hatası: ' + e.message, 'error');
+    } finally {
+      utils.setLoading('wa-logout-btn', false);
+    }
+  }
+
+  showConfirm(message) {
+    return new Promise((resolve) => {
+      const backdrop = document.getElementById('confirm-backdrop');
+      const dialog = document.getElementById('confirm-dialog');
+      const msgEl = document.getElementById('confirm-message');
+      const okBtn = document.getElementById('confirm-ok-btn');
+      const cancelBtn = document.getElementById('confirm-cancel-btn');
+
+      msgEl.textContent = message;
+      backdrop.classList.remove('hidden');
+      dialog.classList.remove('hidden');
+
+      const cleanup = (result) => {
+        backdrop.classList.add('hidden');
+        dialog.classList.add('hidden');
+        okBtn.removeEventListener('click', onOk);
+        cancelBtn.removeEventListener('click', onCancel);
+        resolve(result);
+      };
+
+      const onOk = () => cleanup(true);
+      const onCancel = () => cleanup(false);
+
+      okBtn.addEventListener('click', onOk);
+      cancelBtn.addEventListener('click', onCancel);
+    });
   }
 }
 
-/* ═══════════════ BAŞLAT ═══════════════ */
+/* BAŞLAT */
 const app = new FaturaBotApp();
 document.addEventListener('DOMContentLoaded', () => app.init());
 

@@ -48,9 +48,10 @@ dmypy.json
 .env.production
 *.pem
 
-# ─── Veri Çıktıları (Excel, Görseller) ──────────────────────
+# ─── Veri Çıktıları (Excel, Görseller, WA Auth) ─────────────
 public/daily/*.xlsx
 public/images/
+public/whatsapp-auth/
 public/*.xlsx
 
 # ─── Chrome Extension (build artifacts) ──────────────────────

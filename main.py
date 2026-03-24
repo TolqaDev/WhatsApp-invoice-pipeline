@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import (
-    VERSION, GEMINI_API_KEY, HOST, PORT, LOG_LEVEL, ENV, IS_DEV,
+    VERSION, GEMINI_API_KEY, HOST, PORT, LOG_LEVEL, ENV, IS_DEV, IS_PROD,
     MONTHLY_BUDGET_TL, USD_TL_RATE, SAVE_IMAGES, IMAGES_DIR,
     OCR_REJECT_THRESHOLD, OCR_SUFFICIENT_THRESHOLD,
     RATE_LIMIT_RPM, API_SECRET, CORS_ORIGINS,
@@ -20,45 +20,31 @@ from src.routes.process import router as process_router
 from src.routes.health import router as health_router
 from src.routes.export import router as export_router
 from src.routes.queries import router as queries_router
+from src.routes.whatsapp import router as whatsapp_router
+from src.routes.luca import router as luca_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.setup(log_level=LOG_LEVEL)
-
-    print("")
-    print("=" * 42)
-    print(f"  Fatura Bot -- Python API v{VERSION}")
-    print(f"  Ortam: {ENV.upper()}")
-    print("=" * 42)
-    print("")
-
-    logger.info("API starting", event="bot_started", version=VERSION)
+    logger.info("API starting", event="bot_started", version=VERSION, env=ENV)
 
     ocr_prefilter.reject_threshold = OCR_REJECT_THRESHOLD
     ocr_prefilter.ocr_sufficient_threshold = OCR_SUFFICIENT_THRESHOLD
 
     if not GEMINI_API_KEY or GEMINI_API_KEY == "your_key_here":
         logger.error("GEMINI_API_KEY not set! Check your .env file.")
-        print("[!] GEMINI_API_KEY not set!")
     else:
         gemini_service.initialize(GEMINI_API_KEY, monthly_budget_tl=MONTHLY_BUDGET_TL, usd_tl_rate=USD_TL_RATE)
-        print("[+] Gemini service ready")
 
     if SAVE_IMAGES:
         Path(IMAGES_DIR).mkdir(parents=True, exist_ok=True)
 
-    print(f"[{'+'if TESSERACT_AVAILABLE else '!'}] Tesseract OCR {'ready' if TESSERACT_AVAILABLE else 'not found'}")
-    print(f"[+] OCR thresholds: reject={OCR_REJECT_THRESHOLD}, sufficient={OCR_SUFFICIENT_THRESHOLD}")
-    print(f"[+] Rate limit: {RATE_LIMIT_RPM} req/min")
-    if API_SECRET:
-        print("[+] API key auth enabled")
-    print(f"[+] Budget: TL{MONTHLY_BUDGET_TL}/month")
-    print(f"\n>>> http://{HOST}:{PORT} listening\n")
-
-    logger.info("API ready", event="bot_ready", port=PORT, host=HOST)
+    logger.info("API ready", event="bot_ready", port=PORT, host=HOST,
+                tesseract=TESSERACT_AVAILABLE, rate_limit=RATE_LIMIT_RPM,
+                auth_enabled=bool(API_SECRET))
     yield
-    logger.info("API shutting down")
+    logger.info("API shutting down", event="bot_shutdown")
 
 
 app = FastAPI(
@@ -70,9 +56,19 @@ app = FastAPI(
     openapi_url=None,
 )
 
+_cors_origins = (
+    [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
+    if CORS_ORIGINS != "*"
+    else ["*"]
+)
+if IS_PROD and _cors_origins == ["*"]:
+    logger.warning("CORS allow_origins='*' production ortamında geniş kapsamlı — "
+                    ".env dosyasında CORS_ORIGINS'i kısıtlamayı değerlendirin",
+                    event="cors_wide_open")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in CORS_ORIGINS.split(",")] if CORS_ORIGINS != "*" else ["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -85,6 +81,8 @@ app.include_router(process_router)
 app.include_router(health_router)
 app.include_router(export_router)
 app.include_router(queries_router)
+app.include_router(whatsapp_router)
+app.include_router(luca_router)
 
 
 if __name__ == "__main__":

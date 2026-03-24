@@ -55,7 +55,6 @@ async def process_image(request: ImageProcessRequest):
     state.active_processing += 1
 
     try:
-        # Base64 decode & boyut kontrolü
         try:
             image_bytes = base64.b64decode(request.image_base64)
             image_size_mb = len(image_bytes) / (1024 * 1024)
@@ -81,7 +80,6 @@ async def process_image(request: ImageProcessRequest):
         )
 
         if not ocr_result.is_receipt:
-            stats["prefilter_rejected"] += 1
             stats["total_errors"] += 1
             if gemini_service.budget:
                 stats["estimated_savings_tl"] += gemini_service.budget.est_cost_per_receipt_tl
@@ -180,7 +178,7 @@ async def process_image(request: ImageProcessRequest):
                 matrah=receipt_data.matrah_toplam if receipt_data.kdv else None,
                 kdv_oran=kdv_oran_str,
                 kdv_tutar=receipt_data.kdv_toplam if receipt_data.kdv else None),
-            excel_path=str(excel_service._data_dir), processing_time_ms=processing_time)
+            excel_path=excel_service.current_filename, processing_time_ms=processing_time)
 
     except HTTPException:
         stats["total_errors"] += 1

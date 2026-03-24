@@ -47,7 +47,6 @@ class PrefilterResult:
     extracted_data: Optional[dict] = field(default=None, repr=False)
 
 
-# ─── Anahtar Kelimeler ───────────────────────────────────────
 STRONG_KEYWORDS = [
     "TOPLAM", "GENEL TOPLAM", "ARA TOPLAM", "G.TOPLAM",
     "KDV", "KDVTOPLAM", "KDV TOPLAM",
@@ -78,7 +77,6 @@ ASPECT_RATIO_BONUS = 5
 TEXT_DENSITY_BONUS = 3
 
 
-# ─── OCR Veri Çıkarıcı ──────────────────────────────────────
 class OCRReceiptExtractor:
 
     @staticmethod
@@ -288,7 +286,6 @@ class OCRReceiptExtractor:
             return None
 
 
-# ─── Ana OCR Servisi ─────────────────────────────────────────
 class OCRPrefilter:
 
     def __init__(self, reject_threshold: int = 20, ocr_sufficient_threshold: int = 70):

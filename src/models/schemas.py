@@ -36,6 +36,8 @@ class ReceiptData(BaseModel):
     kdv: list[KdvKalem] = Field(default_factory=list)
     toplam: float = 0.0
     odeme: Optional[str] = None
+    plaka: Optional[str] = None
+    is_binek_auto: Optional[bool] = None
     hata: Optional[str] = None
 
     @property

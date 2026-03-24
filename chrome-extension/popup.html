@@ -49,6 +49,10 @@
           <i class="fas fa-file-excel"></i>
           <span>Dışa Aktar</span>
         </button>
+        <button class="sidebar-nav-item" data-tab="whatsapp" title="WhatsApp">
+          <i class="fab fa-whatsapp"></i>
+          <span>WhatsApp</span>
+        </button>
       </nav>
       <div class="sidebar-bottom">
         <button class="sidebar-nav-item sidebar-theme-btn" id="theme-toggle" title="Tema Değiştir">
@@ -92,8 +96,12 @@
               <span id="api-modal-status-text">Bağlantı durumu bilinmiyor</span>
             </div>
             <div class="field">
-              <label for="api-url"><i class="fas fa-server"></i> Sunucu Adresi</label>
+              <label for="api-url"><i class="fas fa-server"></i> Python API Adresi</label>
               <input type="text" id="api-url" placeholder="http://localhost:3000" spellcheck="false">
+            </div>
+            <div class="field">
+              <label for="wa-url"><i class="fab fa-whatsapp"></i> WhatsApp Köprü Adresi</label>
+              <input type="text" id="wa-url" placeholder="http://localhost:3001" spellcheck="false">
             </div>
             <div class="field">
               <label for="api-key"><i class="fas fa-key"></i> API Anahtarı</label>
@@ -328,21 +336,38 @@
           <div class="export-layout">
             <!-- Hızlı İşlem Kartları -->
             <div class="export-action-cards">
-              <div class="export-action-card" id="export-today-btn">
-                <div class="export-card-icon"><i class="fas fa-calendar-day"></i></div>
-                <div class="export-card-body">
-                  <strong>Bugünü İndir</strong>
-                  <span>Günlük Excel dosyası</span>
+              <!-- Bugünü İndir — dropdown -->
+              <div class="export-action-card-wrapper">
+                <div class="export-action-card" id="export-today-btn">
+                  <div class="export-card-icon"><i class="fas fa-calendar-day"></i></div>
+                  <div class="export-card-body">
+                    <strong>Bugünü İndir</strong>
+                    <span>Fiş Aktarım Şablonu</span>
+                  </div>
+                  <i class="fas fa-chevron-down export-card-arrow"></i>
                 </div>
-                <i class="fas fa-download export-card-arrow"></i>
+                <div class="export-dropdown hidden" id="export-today-dropdown">
+                  <button class="export-dropdown-item" data-format="xlsx"><i class="fas fa-file-excel"></i> XLSX <span class="export-fmt-badge">Excel</span></button>
+                  <button class="export-dropdown-item" data-format="csv"><i class="fas fa-file-csv"></i> CSV <span class="export-fmt-badge">Metin</span></button>
+                  <button class="export-dropdown-item" data-format="xls"><i class="fas fa-file-alt"></i> XLS <span class="export-fmt-badge">Eski Excel</span></button>
+                </div>
               </div>
-              <div class="export-action-card" id="export-all-btn">
-                <div class="export-card-icon purple"><i class="fas fa-layer-group"></i></div>
-                <div class="export-card-body">
-                  <strong>Tümünü Birleştir</strong>
-                  <span>Tek dosyada indir</span>
+
+              <!-- Tümünü Birleştir — dropdown -->
+              <div class="export-action-card-wrapper">
+                <div class="export-action-card" id="export-all-btn">
+                  <div class="export-card-icon purple"><i class="fas fa-layer-group"></i></div>
+                  <div class="export-card-body">
+                    <strong>Tümünü Birleştir</strong>
+                    <span>Tek dosyada indir</span>
+                  </div>
+                  <i class="fas fa-chevron-down export-card-arrow"></i>
                 </div>
-                <i class="fas fa-download export-card-arrow"></i>
+                <div class="export-dropdown hidden" id="export-all-dropdown">
+                  <button class="export-dropdown-item" data-format="xlsx"><i class="fas fa-file-excel"></i> XLSX <span class="export-fmt-badge">Excel</span></button>
+                  <button class="export-dropdown-item" data-format="csv"><i class="fas fa-file-csv"></i> CSV <span class="export-fmt-badge">Metin</span></button>
+                  <button class="export-dropdown-item" data-format="xls"><i class="fas fa-file-alt"></i> XLS <span class="export-fmt-badge">Eski Excel</span></button>
+                </div>
               </div>
             </div>
 
@@ -354,6 +379,11 @@
               </div>
               <div class="export-date-row">
                 <input type="date" id="export-date" class="export-date-input">
+                <select id="export-date-format" class="export-format-select">
+                  <option value="xlsx">XLSX</option>
+                  <option value="csv">CSV</option>
+                  <option value="xls">XLS</option>
+                </select>
                 <button class="btn btn-primary btn-sm" id="export-date-btn"><i class="fas fa-download"></i> İndir</button>
               </div>
             </div>
@@ -367,6 +397,61 @@
               <div class="daily-files-list" id="daily-files-list">
                 <div class="status-empty"><i class="fas fa-folder-open"></i><span>Dosya bulunamadı</span></div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ═══════════════ WHATSAPP SEKMESİ ═══════════════ -->
+        <section id="tab-whatsapp" class="tab-content">
+          <div class="wa-layout">
+            <!-- Bağlantı Durumu Kartı -->
+            <div class="wa-status-card">
+              <div class="wa-status-header">
+                <div class="wa-status-icon" id="wa-status-icon">
+                  <i class="fab fa-whatsapp"></i>
+                </div>
+                <div class="wa-status-info">
+                  <h4 id="wa-status-title">WhatsApp Bağlantısı</h4>
+                  <span class="wa-status-badge" id="wa-status-badge">Bilinmiyor</span>
+                </div>
+                <button class="icon-btn-sm" id="wa-refresh-status" title="Durumu Yenile"><i class="fas fa-sync-alt"></i></button>
+              </div>
+              <div class="wa-status-details" id="wa-status-details">
+                <div class="wa-detail-row"><i class="fas fa-phone"></i><span>Numara</span><strong id="wa-phone">-</strong></div>
+                <div class="wa-detail-row"><i class="fas fa-clock"></i><span>Çalışma Süresi</span><strong id="wa-uptime">-</strong></div>
+                <div class="wa-detail-row"><i class="fas fa-check-double"></i><span>Son İşlem</span><strong id="wa-last-processed">-</strong></div>
+                <div class="wa-detail-row"><i class="fas fa-user-shield"></i><span>İzinli JID</span><strong id="wa-allowed-jids">-</strong></div>
+              </div>
+            </div>
+
+            <!-- QR Kod Bölümü -->
+            <div class="wa-qr-card" id="wa-qr-card">
+              <div class="wa-qr-header">
+                <i class="fas fa-qrcode"></i>
+                <span>QR Kod ile Giriş</span>
+              </div>
+              <div class="wa-qr-body" id="wa-qr-body">
+                <div class="wa-qr-placeholder" id="wa-qr-placeholder">
+                  <i class="fas fa-qrcode"></i>
+                  <p>QR kod yükleniyor...</p>
+                  <span>WhatsApp'ınızdan QR kodu tarayın</span>
+                </div>
+                <img id="wa-qr-image" class="wa-qr-image hidden" alt="WhatsApp QR Kod" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
+              </div>
+              <div class="wa-qr-hint">
+                <i class="fas fa-info-circle"></i>
+                WhatsApp > Bağlı Cihazlar > Cihaz Bağla ile tarayın
+              </div>
+            </div>
+
+            <!-- İşlem Butonları -->
+            <div class="wa-actions">
+              <button class="btn btn-outline btn-sm wa-action-btn" id="wa-restart-btn">
+                <i class="fas fa-plug"></i> Bağlan
+              </button>
+              <button class="btn btn-danger btn-sm wa-action-btn" id="wa-logout-btn" disabled style="opacity:0.4;pointer-events:none">
+                <i class="fas fa-sign-out-alt"></i> Oturumu Kapat
+              </button>
             </div>
           </div>
         </section>

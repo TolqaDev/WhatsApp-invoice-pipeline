@@ -47,9 +47,17 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter(RATE_LIMIT_RPM)
+_cleanup_counter = 0
+_CLEANUP_EVERY_N_REQUESTS = 100
 
 
 async def security_middleware(request: Request, call_next):
+    global _cleanup_counter
+    _cleanup_counter += 1
+    if _cleanup_counter >= _CLEANUP_EVERY_N_REQUESTS:
+        _cleanup_counter = 0
+        rate_limiter.cleanup()
+
     client_ip = request.client.host if request.client else "unknown"
     path = request.url.path
 

@@ -1,161 +1,173 @@
-"""Fatura Bot — Günlük Excel dosyalarına fiş verisi yazma servisi."""
+"""Fatura Bot — Fiş Aktarım Şablon formatında günlük Excel/CSV/XLS çıktı servisi."""
 
 import asyncio
+import csv
+import io
+import shutil
 from datetime import datetime, timezone, date
 from pathlib import Path
 from typing import Optional
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
 from src.models.schemas import ReceiptData
 from src.utils.logger import logger
 
+from src.services.luca_transformer import (
+    MASRAF_HESAP_KODU, KDV_HESAP_KODU, ODEME_HESAP_KODU,
+    ODEME_BELGE_TR, fis_to_luca_list,
+)
+
 
 class ExcelService:
+    """Fiş Aktarım Şablon formatında Excel dosyası oluşturma servisi."""
 
-    COLUMNS = [
-        ("Belge Tarihi", 14),
-        ("Belge No", 16),
-        ("Firma Unvanı", 30),
-        ("VKN/TCKN", 14),
-        ("Masraf İçeriği", 20),
-        ("Matrah (₺)", 14),
-        ("KDV Oranı", 14),
-        ("KDV Tutarı (₺)", 14),
-        ("Genel Toplam (₺)", 16),
-        ("Ödeme Şekli", 16),
-        ("Güven %", 10),
-        ("Kaynak", 10),
-        ("Gönderen", 16),
-        ("İşlem Zamanı", 20),
+    TEMPLATE_COLUMNS = [
+        ("Fiş No",         14.15, "@"),
+        ("Fiş Tarihi",     13.29, "dd/mm/yyyy"),
+        ("Fiş Açıklama",   33.71, "@"),
+        ("Hesap Kodu",     18.29, "@"),
+        ("Evrak No",       15.15, "@"),
+        ("Evrak Tarihi",   13.29, "dd/mm/yyyy"),
+        ("Detay Açıklama", 34.71, "@"),
+        ("Borç",           11.86, "#,##0.00"),
+        ("Alacak",         11.86, "#,##0.00"),
+        ("Miktar",         11.86, "#,##0.00000"),
+        ("Belge Tr",       16.41, "@"),
+        ("Para Birimi",    15.79, "@"),
+        ("Kur",            11.86, "#,##0.00000000"),
+        ("Döviz Tutarı",   17.55, "#,##0.00"),
     ]
 
-    HEADER_FILL = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-    HEADER_FONT = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
-    EVEN_ROW_FILL = PatternFill(start_color="D6E4F0", end_color="D6E4F0", fill_type="solid")
-    ODD_ROW_FILL = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-    GREEN_FONT = Font(color="006100")
-    ORANGE_FONT = Font(color="BF8F00")
-    RED_FONT = Font(color="9C0006")
-    THIN_BORDER = Border(
-        left=Side(style="thin", color="B4C6E7"),
-        right=Side(style="thin", color="B4C6E7"),
-        top=Side(style="thin", color="B4C6E7"),
-        bottom=Side(style="thin", color="B4C6E7"),
-    )
+    HEADER_FONT = Font(name="Calibri", bold=True, color="FF000000", size=10, charset=1, family=2)
+    HEADER_FILL = PatternFill(patternType="solid", fgColor="FFC0C0C0", bgColor="FFCCCCFF")
+    HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    HEADER_ROW_HEIGHT = 21.75
+    SHEET_NAME = "Fiş Aktarım Şablon"
 
     def __init__(self, data_dir: str = "public/daily"):
         self._data_dir = Path(data_dir)
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
+        self._template_path = Path(__file__).parent.parent / "templates" / "fis_aktarim_sablon.xlsx"
+
+    @property
+    def current_filename(self) -> str:
+        """Günlük Excel dosyasının sadece adını döndürür (yol bilgisi olmadan)."""
+        return self._daily_path().name
 
     def _daily_path(self, target_date: Optional[date] = None) -> Path:
         d = target_date or date.today()
         return self._data_dir / f"{d.isoformat()}.xlsx"
 
     @staticmethod
-    def _parse_receipt_date(tarih_str: Optional[str]) -> Optional[date]:
+    def _parse_receipt_date(tarih_str: Optional[str]) -> Optional[str]:
+        """Tarih string'ini DD/MM/YYYY formatına normalleştir."""
         if not tarih_str:
             return None
         try:
-            parts = tarih_str.replace('.', '/').replace('-', '/').split('/')
+            parts = tarih_str.replace(".", "/").replace("-", "/").split("/")
             if len(parts) == 3:
                 d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
                 if y < 100:
                     y += 2000
-                return date(y, m, d)
+                return f"{d:02d}/{m:02d}/{y:04d}"
         except (ValueError, IndexError):
             pass
-        return None
+        return tarih_str
 
     def _ensure_workbook(self, file_path: Path) -> Workbook:
+        """Mevcut dosyayı aç veya şablondan yenisini oluştur."""
         if file_path.exists():
             try:
+                wb = load_workbook(str(file_path))
+                if self.SHEET_NAME in wb.sheetnames:
+                    return wb
+                # Eski formatta dosya — yeni şablon oluştur
+                wb.close()
+            except Exception as e:
+                logger.warning("Mevcut dosya okunamadı, yeniden oluşturulacak", error=str(e))
+
+        # Şablon dosyasından kopyala
+        if self._template_path.exists():
+            try:
+                shutil.copy2(str(self._template_path), str(file_path))
                 return load_workbook(str(file_path))
             except Exception as e:
-                logger.error("Excel dosyası açılamadı, yeni oluşturulacak", error=str(e))
+                logger.warning("Şablon kopyalanamadı, sıfırdan oluşturuluyor", error=str(e))
 
         wb = Workbook()
         ws = wb.active
-        ws.title = "Faturalar"
+        ws.title = self.SHEET_NAME
         self._setup_header(ws)
         wb.save(str(file_path))
         return wb
 
     def _setup_header(self, ws):
-        for col_idx, (title, width) in enumerate(self.COLUMNS, 1):
+        """Şablon başlık satırını birebir oluştur."""
+        ws.row_dimensions[1].height = self.HEADER_ROW_HEIGHT
+
+        for col_idx, (title, width, num_fmt) in enumerate(self.TEMPLATE_COLUMNS, 1):
             cell = ws.cell(row=1, column=col_idx, value=title)
             cell.font = self.HEADER_FONT
             cell.fill = self.HEADER_FILL
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-            cell.border = self.THIN_BORDER
+            cell.alignment = self.HEADER_ALIGNMENT
+            cell.number_format = num_fmt
             ws.column_dimensions[get_column_letter(col_idx)].width = width
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(self.COLUMNS))}1"
+
+    def _build_rows(self, data: ReceiptData) -> list[list]:
+        """Bir fişten şablon formatında satır(lar) üretir.
+
+        Çift kayıt (double-entry) muhasebe prensibi:
+          • Gider hesabına BORÇ  (matrah)
+          • KDV hesabına   BORÇ  (her oran için ayrı — varsa)
+          • Ödeme hesabına ALACAK (toplam)
+        Toplam borç == toplam alacak → muhasebe denkliği sağlanır.
+
+        Dönüşüm mantığı luca_transformer modülüne delege edilmiştir.
+        """
+        return fis_to_luca_list(data)
 
     async def add_row(self, data: ReceiptData, confidence: int, sender: str, source: str = "gemini") -> int:
-        """Fiş verisini bugünün Excel dosyasına yaz."""
+        """Fiş verisini bugünün dosyasına çift kayıt olarak yaz. İlk satır numarasını döndürür."""
         async with self._lock:
             try:
                 file_path = self._daily_path(date.today())
-
                 wb = self._ensure_workbook(file_path)
-                ws = wb["Faturalar"]
-                row = ws.max_row + 1
+                ws = wb[self.SHEET_NAME]
 
-                kdv_oran_str = ", ".join(k.oran for k in data.kdv) if data.kdv else ""
-                now_str = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S")
+                first_row = ws.max_row + 1
+                template_rows = self._build_rows(data)
 
-                row_data = [
-                    data.tarih or "",
-                    data.fis_no or "",
-                    data.firma or "",
-                    data.vkn or "",
-                    data.masraf or "",
-                    data.matrah_toplam,
-                    kdv_oran_str,
-                    data.kdv_toplam,
-                    data.toplam or 0,
-                    data.odeme or "",
-                    confidence,
-                    source.upper(),
-                    sender,
-                    now_str,
-                ]
-
-                for col_idx, value in enumerate(row_data, 1):
-                    cell = ws.cell(row=row, column=col_idx, value=value)
-                    cell.border = self.THIN_BORDER
-                    cell.fill = self.EVEN_ROW_FILL if row % 2 == 0 else self.ODD_ROW_FILL
-
-                for col in [6, 8, 9]:
-                    ws.cell(row=row, column=col).number_format = '#,##0.00'
-
-                conf_cell = ws.cell(row=row, column=11)
-                if confidence >= 80:
-                    conf_cell.font = self.GREEN_FONT
-                elif confidence >= 60:
-                    conf_cell.font = self.ORANGE_FONT
-                else:
-                    conf_cell.font = self.RED_FONT
+                for row_data in template_rows:
+                    row_num = ws.max_row + 1
+                    for col_idx, value in enumerate(row_data, 1):
+                        cell = ws.cell(row=row_num, column=col_idx, value=value)
+                        cell.number_format = self.TEMPLATE_COLUMNS[col_idx - 1][2]
 
                 wb.save(str(file_path))
 
-                logger.info("Excel satırı eklendi", event="excel_row_added",
-                            file=file_path.name, row_number=row,
-                            store=data.firma, total=data.toplam,
-                            source=source, confidence=confidence)
-
-                return row
+                logger.info(
+                    "Fiş aktarım satır(lar)ı eklendi",
+                    event="excel_row_added",
+                    file=file_path.name,
+                    first_row=first_row,
+                    row_count=len(template_rows),
+                    store=data.firma,
+                    total=data.toplam,
+                    source=source,
+                    confidence=confidence,
+                )
+                return first_row
 
             except Exception as e:
                 logger.error("Excel yazma hatası", event="excel_error", error=str(e))
                 raise
 
     async def update_row(self, row_number: int, data: dict, target_date: Optional[date] = None) -> bool:
-        """Belirtilen satırı güncelle (firma, tarih, toplam, odeme, masraf)."""
+        """Belirtilen satır grubunu güncelle (aynı Fiş No'ya sahip satırlar)."""
         async with self._lock:
             try:
                 file_path = self._daily_path(target_date)
@@ -163,38 +175,71 @@ class ExcelService:
                     return False
 
                 wb = load_workbook(str(file_path))
-                ws = wb["Faturalar"]
+                if self.SHEET_NAME not in wb.sheetnames:
+                    wb.close()
+                    return False
+                ws = wb[self.SHEET_NAME]
 
                 if row_number < 2 or row_number > ws.max_row:
                     wb.close()
                     return False
 
-                # Sütun eşlemesi: field → column index
-                field_col_map = {
-                    "tarih": 1,
-                    "fis_no": 2,
-                    "firma": 3,
-                    "vkn": 4,
-                    "masraf": 5,
-                    "matrah": 6,
-                    "kdv_oran": 7,
-                    "kdv_tutar": 8,
-                    "toplam": 9,
-                    "odeme": 10,
-                }
+                # Fiş No'dan grup satırlarını bul
+                fis_no = ws.cell(row=row_number, column=1).value
+                group_rows = [row_number]
+                if fis_no:
+                    for r in range(row_number + 1, ws.max_row + 1):
+                        if ws.cell(row=r, column=1).value == fis_no:
+                            group_rows.append(r)
+                        else:
+                            break
 
-                for field_name, col_idx in field_col_map.items():
-                    if field_name in data and data[field_name] is not None:
-                        ws.cell(row=row_number, column=col_idx, value=data[field_name])
+                for r in group_rows:
+                    if "fis_no" in data and data["fis_no"] is not None:
+                        ws.cell(row=r, column=1, value=data["fis_no"])
+                        ws.cell(row=r, column=5, value=data["fis_no"])
 
-                for col in [6, 8, 9]:
-                    ws.cell(row=row_number, column=col).number_format = '#,##0.00'
+                    if "tarih" in data and data["tarih"] is not None:
+                        formatted = self._parse_receipt_date(data["tarih"])
+                        ws.cell(row=r, column=2, value=formatted)
+                        ws.cell(row=r, column=6, value=formatted)
+
+                    if "firma" in data and data["firma"] is not None:
+                        ws.cell(row=r, column=3, value=data["firma"])
+
+                if "masraf" in data and data["masraf"] is not None:
+                    masraf_kodu = MASRAF_HESAP_KODU.get(data["masraf"], "770.99")
+                    ws.cell(row=group_rows[0], column=4, value=masraf_kodu)
+                    firma_val = ws.cell(row=group_rows[0], column=3).value or ""
+                    ws.cell(row=group_rows[0], column=7, value=f"{data['masraf']} - {firma_val}")
+
+                if "toplam" in data and data["toplam"] is not None:
+                    toplam = float(data["toplam"])
+                    last_row = group_rows[-1]
+                    ws.cell(row=last_row, column=9, value=round(toplam, 2))
+                    if len(group_rows) == 2:
+                        ws.cell(row=group_rows[0], column=8, value=round(toplam, 2))
+
+                if "odeme" in data and data["odeme"] is not None:
+                    odeme_key = data["odeme"].upper()
+                    odeme_kodu = ODEME_HESAP_KODU.get(odeme_key, "100.01")
+                    last_row = group_rows[-1]
+                    ws.cell(row=last_row, column=4, value=odeme_kodu)
+                    belge_tr = ODEME_BELGE_TR.get(odeme_key, "Fiş")
+                    for r in group_rows:
+                        ws.cell(row=r, column=11, value=belge_tr)
 
                 wb.save(str(file_path))
                 wb.close()
 
-                logger.info("Excel satırı güncellendi", event="excel_row_updated",
-                            file=file_path.name, row_number=row_number, fields=list(data.keys()))
+                logger.info(
+                    "Excel satır grubu güncellendi",
+                    event="excel_row_updated",
+                    file=file_path.name,
+                    row_number=row_number,
+                    group_size=len(group_rows),
+                    fields=list(data.keys()),
+                )
                 return True
 
             except Exception as e:
@@ -208,7 +253,8 @@ class ExcelService:
                 if not path.exists():
                     return 0
                 wb = load_workbook(str(path), read_only=True)
-                ws = wb["Faturalar"]
+                sheet = self.SHEET_NAME if self.SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
+                ws = wb[sheet]
                 count = max(ws.max_row - 1, 0)
                 wb.close()
                 return count
@@ -228,8 +274,82 @@ class ExcelService:
                 return path.read_bytes()
             return None
 
-    async def export_all_combined(self) -> Optional[str]:
-        """Tüm günlük dosyaları tek bir Excel'de birleştirir."""
+    async def export_as_xlsx(self, target_date: Optional[date] = None) -> Optional[str]:
+        """XLSX dosya yolu döndür (zaten şablon formatında)."""
+        return await self.get_file_path(target_date)
+
+    async def export_as_csv(self, target_date: Optional[date] = None) -> Optional[bytes]:
+        """Şablon formatında CSV çıktısı üret (UTF-8 BOM, ; ayraçlı)."""
+        async with self._lock:
+            path = self._daily_path(target_date)
+            if not path.exists():
+                return None
+            try:
+                wb = load_workbook(str(path), read_only=True)
+                sheet = self.SHEET_NAME if self.SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
+                ws = wb[sheet]
+
+                output = io.StringIO()
+                writer = csv.writer(output, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+                for row in ws.iter_rows(values_only=True):
+                    writer.writerow([v if v is not None else "" for v in row])
+
+                wb.close()
+                return ("\ufeff" + output.getvalue()).encode("utf-8")
+            except Exception as e:
+                logger.error("CSV export hatası", event="csv_export_error", error=str(e))
+                return None
+
+    async def export_as_xls(self, target_date: Optional[date] = None) -> Optional[bytes]:
+        """Legacy .xls (BIFF) formatında çıktı üret."""
+        async with self._lock:
+            path = self._daily_path(target_date)
+            if not path.exists():
+                return None
+            try:
+                import xlwt
+
+                wb_src = load_workbook(str(path), read_only=True)
+                sheet = self.SHEET_NAME if self.SHEET_NAME in wb_src.sheetnames else wb_src.sheetnames[0]
+                ws_src = wb_src[sheet]
+
+                wb_xls = xlwt.Workbook(encoding="utf-8")
+                ws_xls = wb_xls.add_sheet(self.SHEET_NAME)
+
+                header_style = xlwt.easyxf(
+                    "font: name Calibri, bold on, height 200;"
+                    "pattern: pattern solid, fore_colour gray25;"
+                    "align: horiz center, vert center, wrap on;"
+                )
+                money_fmt = xlwt.easyxf(num_format_str="#,##0.00")
+
+                for row_idx, row in enumerate(ws_src.iter_rows(values_only=True)):
+                    for col_idx, value in enumerate(row):
+                        val = value if value is not None else ""
+                        if row_idx == 0:
+                            ws_xls.write(row_idx, col_idx, val, header_style)
+                        elif col_idx in (7, 8, 13):
+                            ws_xls.write(row_idx, col_idx, val, money_fmt)
+                        else:
+                            ws_xls.write(row_idx, col_idx, val)
+
+                for col_idx, (_, width, _) in enumerate(self.TEMPLATE_COLUMNS):
+                    ws_xls.col(col_idx).width = int(width * 256)
+
+                wb_src.close()
+                buf = io.BytesIO()
+                wb_xls.save(buf)
+                return buf.getvalue()
+
+            except ImportError:
+                logger.warning("xlwt yüklü değil, XLS export devre dışı")
+                return None
+            except Exception as e:
+                logger.error("XLS export hatası", event="xls_export_error", error=str(e))
+                return None
+
+    async def export_all_combined(self, fmt: str = "xlsx") -> Optional[str | bytes]:
+        """Tüm günlük dosyaları birleştirir. fmt: xlsx | csv | xls"""
         async with self._lock:
             try:
                 daily_files = sorted(self._data_dir.glob("*.xlsx"))
@@ -238,7 +358,7 @@ class ExcelService:
 
                 combined_wb = Workbook()
                 combined_ws = combined_wb.active
-                combined_ws.title = "Tüm Faturalar"
+                combined_ws.title = self.SHEET_NAME
                 self._setup_header(combined_ws)
 
                 combined_row = 2
@@ -247,37 +367,93 @@ class ExcelService:
                 for daily_file in daily_files:
                     try:
                         wb = load_workbook(str(daily_file), read_only=True)
-                        ws = wb["Faturalar"]
+                        sheet = self.SHEET_NAME if self.SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
+                        ws = wb[sheet]
                         for row in ws.iter_rows(min_row=2, values_only=True):
                             if not any(row):
                                 continue
                             for col_idx, value in enumerate(row, 1):
                                 cell = combined_ws.cell(row=combined_row, column=col_idx, value=value)
-                                cell.border = self.THIN_BORDER
-                                cell.fill = self.EVEN_ROW_FILL if combined_row % 2 == 0 else self.ODD_ROW_FILL
+                                if col_idx <= len(self.TEMPLATE_COLUMNS):
+                                    cell.number_format = self.TEMPLATE_COLUMNS[col_idx - 1][2]
                             combined_row += 1
                         wb.close()
                         total_files += 1
                     except Exception as e:
                         logger.warning(f"Dosya okunamadı: {daily_file.name}", error=str(e))
 
-                for row_num in range(2, combined_row):
-                    for col in [6, 8, 9]:
-                        combined_ws.cell(row=row_num, column=col).number_format = '#,##0.00'
-
                 self._create_combined_summary(combined_wb, combined_row - 2, total_files)
 
                 output_path = self._data_dir.parent / "all_invoices.xlsx"
                 combined_wb.save(str(output_path))
 
-                logger.info("Birleşik Excel oluşturuldu", event="excel_combined",
-                            total_files=total_files, total_rows=combined_row - 2)
+                logger.info(
+                    "Birleşik dosya oluşturuldu",
+                    event="excel_combined",
+                    total_files=total_files,
+                    total_rows=combined_row - 2,
+                    format=fmt,
+                )
 
-                return str(output_path.resolve())
+                if fmt == "csv":
+                    return self._xlsx_to_csv_bytes(output_path)
+                elif fmt == "xls":
+                    return self._xlsx_to_xls_bytes(output_path)
+                else:
+                    return str(output_path.resolve())
 
             except Exception as e:
                 logger.error("Birleştirme hatası", event="excel_combine_error", error=str(e))
                 raise
+
+    def _xlsx_to_csv_bytes(self, xlsx_path: Path) -> Optional[bytes]:
+        try:
+            wb = load_workbook(str(xlsx_path), read_only=True)
+            sheet = self.SHEET_NAME if self.SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
+            ws = wb[sheet]
+            output = io.StringIO()
+            writer = csv.writer(output, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+            for row in ws.iter_rows(values_only=True):
+                writer.writerow([v if v is not None else "" for v in row])
+            wb.close()
+            return ("\ufeff" + output.getvalue()).encode("utf-8")
+        except Exception as e:
+            logger.error("XLSX→CSV dönüşüm hatası", error=str(e))
+            return None
+
+    def _xlsx_to_xls_bytes(self, xlsx_path: Path) -> Optional[bytes]:
+        try:
+            import xlwt
+            wb_src = load_workbook(str(xlsx_path), read_only=True)
+            sheet = self.SHEET_NAME if self.SHEET_NAME in wb_src.sheetnames else wb_src.sheetnames[0]
+            ws_src = wb_src[sheet]
+
+            wb_xls = xlwt.Workbook(encoding="utf-8")
+            ws_xls = wb_xls.add_sheet(self.SHEET_NAME)
+
+            header_style = xlwt.easyxf(
+                "font: name Calibri, bold on, height 200;"
+                "pattern: pattern solid, fore_colour gray25;"
+                "align: horiz center, vert center, wrap on;"
+            )
+            for row_idx, row in enumerate(ws_src.iter_rows(values_only=True)):
+                for col_idx, val in enumerate(row):
+                    v = val if val is not None else ""
+                    ws_xls.write(row_idx, col_idx, v, header_style if row_idx == 0 else xlwt.Style.default_style)
+
+            for col_idx, (_, width, _) in enumerate(self.TEMPLATE_COLUMNS):
+                ws_xls.col(col_idx).width = int(width * 256)
+
+            wb_src.close()
+            buf = io.BytesIO()
+            wb_xls.save(buf)
+            return buf.getvalue()
+        except ImportError:
+            logger.warning("xlwt yüklü değil, XLS export devre dışı")
+            return None
+        except Exception as e:
+            logger.error("XLSX→XLS dönüşüm hatası", error=str(e))
+            return None
 
     def _create_combined_summary(self, wb: Workbook, total_rows: int, total_files: int):
         ws = wb.create_sheet("Özet")
@@ -288,36 +464,32 @@ class ExcelService:
         ws.column_dimensions["A"].width = 28
         ws.column_dimensions["B"].width = 30
 
-        ws["A1"] = "Fatura Bot — Tüm Faturalar Özeti"
+        ws["A1"] = "Fatura Bot — Fiş Aktarım Özeti"
         ws["A1"].font = title_font
 
-        rows = [
+        sheet_ref = f"'{self.SHEET_NAME}'"
+        summary = [
             ("A3", "Toplam Gün Sayısı:", "B3", total_files),
-            ("A4", "Toplam Fiş Sayısı:", "B4", "=COUNTA('Tüm Faturalar'!A2:A1000000)"),
-            ("A5", "Toplam Harcama (₺):", "B5", "=SUM('Tüm Faturalar'!I2:I1000000)"),
-            ("A6", "Toplam KDV (₺):", "B6", "=SUM('Tüm Faturalar'!H2:H1000000)"),
-            ("A7", "Toplam Matrah (₺):", "B7", "=SUM('Tüm Faturalar'!F2:F1000000)"),
-            ("A8", "OCR ile İşlenen:", "B8", '=COUNTIF(\'Tüm Faturalar\'!L2:L1000000,"OCR")'),
-            ("A9", "Gemini ile İşlenen:", "B9", '=COUNTIF(\'Tüm Faturalar\'!L2:L1000000,"GEMINI")'),
-            ("A10", "Oluşturma Tarihi:", "B10", datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")),
+            ("A4", "Toplam Satır Sayısı:", "B4", f"=COUNTA({sheet_ref}!A2:A1000000)"),
+            ("A5", "Toplam Borç (₺):", "B5", f"=SUM({sheet_ref}!H2:H1000000)"),
+            ("A6", "Toplam Alacak (₺):", "B6", f"=SUM({sheet_ref}!I2:I1000000)"),
+            ("A7", "Oluşturma Tarihi:", "B7", datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M")),
         ]
-
-        for label_ref, label, val_ref, value in rows:
+        for label_ref, label, val_ref, value in summary:
             ws[label_ref] = label
             ws[label_ref].font = label_font
             ws[val_ref] = value
             ws[val_ref].font = value_font
-
-        ws["B5"].number_format = '#,##0.00'
-        ws["B6"].number_format = '#,##0.00'
-        ws["B7"].number_format = '#,##0.00'
+        ws["B5"].number_format = "#,##0.00"
+        ws["B6"].number_format = "#,##0.00"
 
     async def list_daily_files(self) -> list[dict]:
         files = []
         for f in sorted(self._data_dir.glob("*.xlsx"), reverse=True):
             try:
                 wb = load_workbook(str(f), read_only=True)
-                ws = wb["Faturalar"]
+                sheet = self.SHEET_NAME if self.SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
+                ws = wb[sheet]
                 count = max(ws.max_row - 1, 0)
                 wb.close()
                 files.append({"date": f.stem, "file": f.name, "row_count": count})

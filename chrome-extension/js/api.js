@@ -10,44 +10,58 @@ class FaturaAPI {
 
   constructor() {
     this.baseUrl = '';
+    this.waBaseUrl = '';
     this.apiKey = '';
     this._pendingRequests = new Map();
   }
 
-  /* ─── Chrome Storage ─────────────────────────────── */
+  /* Chrome Storage */
   async init() {
+    const sessionStore = chrome.storage.session || chrome.storage.local;
     return new Promise((resolve) => {
-      chrome.storage.local.get(['apiUrl', 'apiKey'], (result) => {
-        this.baseUrl = (result.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
-        this.apiKey = result.apiKey || '';
-        resolve();
-      });
-    });
-  }
-
-  async saveSettings(url, key) {
-    const normalizedUrl = url.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
-    return new Promise((resolve) => {
-      chrome.storage.local.set({ apiUrl: normalizedUrl, apiKey: key }, () => {
-        this.baseUrl = normalizedUrl;
-        this.apiKey = key;
-        resolve();
-      });
-    });
-  }
-
-  async getSettings() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(['apiUrl', 'apiKey'], (result) => {
-        resolve({
-          apiUrl: (result.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, ''),
-          apiKey: result.apiKey || ''
+      chrome.storage.local.get(['apiUrl', 'waUrl'], (local) => {
+        sessionStore.get(['apiKey'], (session) => {
+          this.baseUrl = (local.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+          this.waBaseUrl = (local.waUrl || 'http://localhost:3001').replace(/\/+$/, '');
+          this.apiKey = session.apiKey || '';
+          resolve();
         });
       });
     });
   }
 
-  /* ─── HTTP İstek ───────────────────────────────── */
+  async saveSettings(url, waUrl, key) {
+    const normalizedUrl = url.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+    const normalizedWaUrl = waUrl.replace(/\/+$/, '');
+    const sessionStore = chrome.storage.session || chrome.storage.local;
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ apiUrl: normalizedUrl, waUrl: normalizedWaUrl }, () => {
+        sessionStore.set({ apiKey: key }, () => {
+          this.baseUrl = normalizedUrl;
+          this.waBaseUrl = normalizedWaUrl;
+          this.apiKey = key;
+          resolve();
+        });
+      });
+    });
+  }
+
+  async getSettings() {
+    const sessionStore = chrome.storage.session || chrome.storage.local;
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['apiUrl', 'waUrl'], (local) => {
+        sessionStore.get(['apiKey'], (session) => {
+          resolve({
+            apiUrl: (local.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, ''),
+            waUrl: (local.waUrl || 'http://localhost:3001').replace(/\/+$/, ''),
+            apiKey: session.apiKey || ''
+          });
+        });
+      });
+    });
+  }
+
+  /* HTTP İstek */
   async request(endpoint, options = {}) {
     const url = `${this.baseUrl}/v1${endpoint}`;
     const timeout = options.timeout || FaturaAPI.CONFIG.DEFAULT_TIMEOUT;
@@ -126,7 +140,7 @@ class FaturaAPI {
     return requestPromise;
   }
 
-  /* ─── Health & Monitoring ────────────────────────── */
+  /* Health & Monitoring */
   async getHealth() {
     return this.request('/health');
   }
@@ -143,7 +157,7 @@ class FaturaAPI {
     return this.request('/queue-status');
   }
 
-  /* ─── Process ────────────────────────────────────── */
+  /* Process */
   async processImage(imageBase64, mimeType, sender = 'chrome-extension', requestId = null) {
     const payload = {
       image_base64: imageBase64,
@@ -160,7 +174,7 @@ class FaturaAPI {
     });
   }
 
-  /* ─── Sorgular ───────────────────────────────────── */
+  /* Sorgular */
   async getRecentQueries(limit = 20) {
     return this.request(`/recent-queries?limit=${limit}`);
   }
@@ -172,18 +186,73 @@ class FaturaAPI {
     });
   }
 
-  /* ─── Export ─────────────────────────────────────── */
+  /* Export */
   async getDailyFiles() {
     return this.request('/daily-files');
   }
 
-  async exportExcel(dateStr = null) {
-    const endpoint = dateStr ? `/export?date=${dateStr}` : '/export';
+  async exportExcel(dateStr = null, format = 'xlsx') {
+    let endpoint = '/export';
+    const params = [];
+    if (dateStr) params.push(`date=${dateStr}`);
+    if (format && format !== 'xlsx') params.push(`format=${format}`);
+    if (params.length) endpoint += '?' + params.join('&');
     return this.request(endpoint, { responseType: 'blob' });
   }
 
-  async exportAll() {
-    return this.request('/export-all', { responseType: 'blob' });
+  async exportAll(format = 'xlsx') {
+    const endpoint = format && format !== 'xlsx' ? `/export-all?format=${format}` : '/export-all';
+    return this.request(endpoint, { responseType: 'blob' });
+  }
+
+  /* WhatsApp Bridge */
+  async waRequest(path, options = {}) {
+    const url = `${this.waBaseUrl}${path}`;
+    const timeout = options.timeout || 10000;
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers['X-API-Key'] = this.apiKey;
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      const data = await response.json();
+      if (!response.ok) {
+        const error = new Error(data.message || data.error || `HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      return data;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') throw new Error('WhatsApp köprüsü zaman aşımına uğradı.');
+      if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+        throw new Error('WhatsApp köprüsüne bağlanılamadı. Adres ve portu kontrol edin.');
+      }
+      throw error;
+    }
+  }
+
+  async getWhatsAppStatus() {
+    return this.waRequest('/status');
+  }
+
+  async getWhatsAppQR() {
+    return this.waRequest('/qr');
+  }
+
+  async whatsAppLogout() {
+    return this.waRequest('/logout', { method: 'POST', timeout: 15000 });
+  }
+
+  async whatsAppRestart() {
+    return this.waRequest('/restart', { method: 'POST', timeout: 15000 });
   }
 }
 

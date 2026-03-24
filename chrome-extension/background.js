@@ -7,7 +7,6 @@
 let isProcessing = false;
 let keepAliveTimer = null;
 
-/* ═══════════════ MESAJ DİNLEYİCİ ═══════════════ */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.command === 'START_QUEUE') {
     if (isProcessing) {
@@ -23,7 +22,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     chromeGet(['queue_meta']).then(({ queue_meta }) => {
       sendResponse(queue_meta || null);
     });
-    return true; // async sendResponse
+    return true;
   }
 
   if (message.command === 'CANCEL_QUEUE') {
@@ -35,7 +34,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-/* ═══════════════ YARIM KUYRUK DEVAM ═══════════════ */
 chrome.runtime.onStartup.addListener(checkAndResume);
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[Fatura Bot] Service worker installed');
@@ -51,7 +49,6 @@ function checkAndResume() {
   });
 }
 
-/* ═══════════════ KEEPALIVE (SW idle timeout koruması) ═══════════════ */
 function startKeepAlive() {
   stopKeepAlive();
   // Her 25 saniyede bir ping — MV3 SW 30sn inaktivitede ölür
@@ -67,14 +64,12 @@ function stopKeepAlive() {
   }
 }
 
-/* ═══════════════ İPTAL ═══════════════ */
 let cancelRequested = false;
 
 function cancelQueue() {
   cancelRequested = true;
 }
 
-/* ═══════════════ ANA KUYRUK İŞLEMCİ ═══════════════ */
 async function processQueue() {
   if (isProcessing) return;
   isProcessing = true;
@@ -82,7 +77,9 @@ async function processQueue() {
   startKeepAlive();
 
   try {
-    const { apiUrl, apiKey } = await chromeGet(['apiUrl', 'apiKey']);
+    const { apiUrl } = await chromeGet(['apiUrl']);
+    const sessionStore = chrome.storage.session || chrome.storage.local;
+    const { apiKey } = await new Promise(resolve => sessionStore.get(['apiKey'], resolve));
     const baseUrl = normalizeUrl(apiUrl || 'http://localhost:3000');
 
     while (true) {
@@ -161,7 +158,6 @@ async function processQueue() {
   }
 }
 
-/* ═══════════════ API ÇAĞRISI ═══════════════ */
 async function fetchProcessImage(baseUrl, apiKey, imageBase64, mimeType) {
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['X-API-Key'] = apiKey;
@@ -188,7 +184,6 @@ async function fetchProcessImage(baseUrl, apiKey, imageBase64, mimeType) {
   return data;
 }
 
-/* ═══════════════ YARDIMCILAR ═══════════════ */
 function broadcast(msg) {
   chrome.runtime.sendMessage(msg).catch(() => {
     // Popup kapalı — sessizce yut

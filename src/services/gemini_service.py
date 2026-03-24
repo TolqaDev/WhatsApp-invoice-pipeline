@@ -31,7 +31,7 @@ RECEIPT_SYSTEM_PROMPT = """TR POS fişi→JSON. Başka metin ekleme.
 "fis_no":"str|null",
 "firma":"str|null",
 "vkn":"10-11 hane|null",
-"masraf":"Market|Yemek|Akaryakıt|Kırtasiye|Giyim|Ulaşım|Konaklama|Teknoloji|Sağlık|Temizlik|Diğer",
+"masraf":"Market|Yemek|Akaryakıt|Otopark|Kırtasiye|Giyim|Ulaşım|Konaklama|Teknoloji|Sağlık|Temizlik|Diğer",
 "kdv":[{"oran":"%8","matrah":0.00,"tutar":0.00}],
 "toplam":0.00,
 "odeme":"NAKİT|KART|HAVALE|null"

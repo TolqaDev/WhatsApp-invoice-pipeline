@@ -131,6 +131,10 @@ class MonthlyBudgetTracker:
         return self._budget_tl
 
     @property
+    def usd_tl_rate(self) -> float:
+        return self._usd_tl_rate
+
+    @property
     def estimated_remaining_receipts(self) -> int:
         if self._est_cost_tl <= 0:
             return 0
@@ -155,6 +159,14 @@ class GeminiService:
         self.budget = MonthlyBudgetTracker(monthly_budget_tl=monthly_budget_tl, usd_tl_rate=usd_tl_rate)
         logger.info("Gemini servisi başlatıldı", event="gemini_initialized",
                      model=self._model_name, monthly_budget_tl=monthly_budget_tl)
+
+    @property
+    def is_active(self) -> bool:
+        return self._client is not None
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
 
     async def analyze_receipt(self, image_data: bytes | str, mime_type: str) -> ReceiptData:
         """Fiş görselini analiz eder ve yapılandırılmış veri döndürür."""

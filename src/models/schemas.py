@@ -90,6 +90,7 @@ class StatsResponse(BaseModel):
     total_processed: int = 0
     total_errors: int = 0
     today_processed: int = 0
+    today_errors: int = 0
     average_confidence: float = 0.0
     average_processing_ms: float = 0.0
     top_stores: list[str] = Field(default_factory=list)
@@ -158,3 +159,16 @@ class UpdateRowResponse(BaseModel):
     success: bool = True
     message: str = "Satır güncellendi"
 
+
+class ErrorRecordItem(BaseModel):
+    timestamp: str
+    error_code: str
+    message: str
+    sender: Optional[str] = None
+    request_id: Optional[str] = None
+
+
+class ErrorsResponse(BaseModel):
+    errors: list[dict] = Field(default_factory=list)
+    total: int = 0
+    today_count: int = 0

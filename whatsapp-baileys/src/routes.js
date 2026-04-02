@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import QRCode from 'qrcode';
 import config from './config.js';
-import { getState, disconnect, restart, clearAuth } from './socket.js';
+import { getState, disconnect, restart, clearAuth, sendText, updateAllowedJids } from './socket.js';
 
 const router = Router();
 
@@ -73,11 +73,71 @@ router.post('/logout', async (_req, res) => {
   }
 });
 
+router.post('/send-notification', async (req, res) => {
+  const state = getState();
+  if (state.connection !== 'connected') {
+    return res.status(503).json({ success: false, message: 'WhatsApp bağlı değil' });
+  }
+
+  const { message, error_type } = req.body || {};
+  if (!message) {
+    return res.status(400).json({ success: false, message: 'Mesaj içeriği gerekli' });
+  }
+
+  const targets = config.allowedJids.length > 0 ? config.allowedJids : [];
+  if (targets.length === 0) {
+    console.warn('[Routes] Bildirim hedefi yok — ALLOW_JID tanımlı değil');
+    return res.json({ success: false, message: 'Bildirim hedefi bulunamadı (ALLOW_JID boş)' });
+  }
+
+  let sent = 0;
+  for (const jid of targets) {
+    try {
+      await sendText(jid, message);
+      sent++;
+    } catch (err) {
+      console.error(`[Routes] Bildirim gönderilemedi: ${jid}`, err.message);
+    }
+  }
+
+  console.log(`[Routes] 📢 Gemini bildirim gönderildi — tip: ${error_type}, hedef: ${sent}/${targets.length}`);
+  res.json({ success: true, sent, total: targets.length });
+});
+
 router.post('/restart', (_req, res) => {
   res.json({ success: true, message: 'Yeniden başlatılıyor...' });
   setImmediate(() => restart().catch(err => {
     console.error('[Routes] Restart hatası:', err.message);
   }));
+});
+
+router.get('/config/jids', (_req, res) => {
+  res.json({
+    success: true,
+    allowedJids: config.allowedJids,
+  });
+});
+
+router.put('/config/jids', (req, res) => {
+  const { jids } = req.body || {};
+  if (!Array.isArray(jids)) {
+    return res.status(400).json({ success: false, message: 'jids alanı dizi olmalıdır' });
+  }
+
+  const normalized = jids
+    .map(j => String(j).trim())
+    .filter(Boolean)
+    .map(j => (j.includes('@') ? j : `${j}@s.whatsapp.net`));
+
+  config.allowedJids = normalized;
+  updateAllowedJids(normalized);
+
+  console.log(`[Routes] İzinli JID güncellendi: ${normalized.length > 0 ? normalized.join(', ') : 'HEPSİ (filtresiz)'}`);
+  res.json({
+    success: true,
+    message: `${normalized.length} JID güncellendi`,
+    allowedJids: normalized,
+  });
 });
 
 function formatUptime(ms) {

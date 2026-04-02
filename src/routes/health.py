@@ -3,13 +3,13 @@
 import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from src.config import VERSION
-from src.models.schemas import HealthResponse, StatsResponse, BudgetResponse, QueueStatusResponse
+from src.models.schemas import HealthResponse, StatsResponse, BudgetResponse, QueueStatusResponse, ErrorsResponse
 from src.services.gemini_service import gemini_service
 from src.services.ocr_prefilter import TESSERACT_AVAILABLE
-from src.state import stats, start_time, excel_service, active_processing, recent_queries
+from src.state import stats, start_time, excel_service, active_processing, recent_queries, recent_errors
 
 router = APIRouter(prefix="/v1", tags=["Monitoring"])
 
@@ -56,9 +56,12 @@ async def get_stats():
 
     top_stores = sorted(stats["store_counts"].items(), key=lambda x: x[1], reverse=True)[:5]
 
+    today_errors = sum(1 for e in recent_errors if e.timestamp.startswith(today))
+
     return StatsResponse(
         total_processed=stats["total_processed"], total_errors=stats["total_errors"],
         today_processed=stats["daily_counts"].get(today, 0),
+        today_errors=today_errors,
         average_confidence=avg_confidence, average_processing_ms=avg_processing,
         top_stores=[name for name, _ in top_stores],
         prefilter_rejected=stats["prefilter_rejected"],
@@ -114,3 +117,11 @@ async def get_queue_status():
         max_recent=recent_queries.maxlen or 50,
     )
 
+
+@router.get("/errors", response_model=ErrorsResponse)
+async def get_errors(limit: int = Query(50, ge=1, le=100, description="Döndürülecek hata sayısı")):
+    """Son hata kayıtlarını döndürür."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    items = [e.to_dict() for e in list(recent_errors)[:limit]]
+    today_count = sum(1 for e in recent_errors if e.timestamp.startswith(today))
+    return ErrorsResponse(errors=items, total=len(recent_errors), today_count=today_count)

@@ -22,6 +22,9 @@ from src.routes.export import router as export_router
 from src.routes.queries import router as queries_router
 from src.routes.whatsapp import router as whatsapp_router
 from src.routes.luca import router as luca_router
+from src.routes.notifications import router as notifications_router
+from src.routes.terminal import router as terminal_router
+from src.routes.settings import router as settings_router
 
 
 @asynccontextmanager
@@ -83,6 +86,9 @@ app.include_router(export_router)
 app.include_router(queries_router)
 app.include_router(whatsapp_router)
 app.include_router(luca_router)
+app.include_router(notifications_router)
+app.include_router(terminal_router)
+app.include_router(settings_router)
 
 
 if __name__ == "__main__":

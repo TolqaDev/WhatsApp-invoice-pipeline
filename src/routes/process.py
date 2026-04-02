@@ -17,9 +17,10 @@ from src.models.schemas import (
 from src.services.gemini_service import (
     gemini_service, GeminiRateLimitError, GeminiUnavailableError, BudgetExceededError,
 )
+from src.services.notification_service import notification_service
 from src.services.ocr_prefilter import ocr_prefilter
 from src.services.validator import validator
-from src.state import stats, excel_service, add_recent_query, active_processing
+from src.state import stats, excel_service, add_recent_query, active_processing, add_error_record
 from src import state
 from src.utils.logger import logger
 
@@ -59,6 +60,7 @@ async def process_image(request: ImageProcessRequest):
             image_bytes = base64.b64decode(request.image_base64)
             image_size_mb = len(image_bytes) / (1024 * 1024)
             if image_size_mb > MAX_IMAGE_SIZE_MB:
+                add_error_record("IMAGE_TOO_LARGE", f"Görsel çok büyük: {image_size_mb:.1f}MB (max {MAX_IMAGE_SIZE_MB}MB)", sender, request_id)
                 raise HTTPException(status_code=422, detail={
                     "success": False, "error_code": "IMAGE_TOO_LARGE",
                     "message": f"Görsel çok büyük: {image_size_mb:.1f}MB (max {MAX_IMAGE_SIZE_MB}MB)",
@@ -66,6 +68,7 @@ async def process_image(request: ImageProcessRequest):
         except HTTPException:
             raise
         except Exception:
+            add_error_record("INVALID_BASE64", "Geçersiz base64 verisi", sender, request_id)
             raise HTTPException(status_code=422, detail={
                 "success": False, "error_code": "INVALID_BASE64",
                 "message": "Geçersiz base64 verisi",
@@ -74,18 +77,18 @@ async def process_image(request: ImageProcessRequest):
         if SAVE_IMAGES:
             _save_debug_image(image_bytes, request_id, request.mime_type)
 
-        # OCR ön-filtre
         ocr_result = await asyncio.to_thread(
             ocr_prefilter.analyze, image_bytes, request.mime_type
         )
 
         if not ocr_result.is_receipt:
-            stats["total_errors"] += 1
+            stats["prefilter_rejected"] += 1
             if gemini_service.budget:
                 stats["estimated_savings_tl"] += gemini_service.budget.est_cost_per_receipt_tl
             logger.info("OCR: Fiş değil, reddedildi",
                         event="ocr_rejected", sender=sender,
                         ocr_score=ocr_result.confidence)
+            add_error_record("NOT_A_RECEIPT", "Gönderilen görsel bir POS fişi olarak tanınamadı", sender, request_id)
             raise HTTPException(status_code=422, detail={
                 "success": False, "error_code": "NOT_A_RECEIPT",
                 "message": "Gönderilen görsel bir POS fişi olarak tanınamadı",
@@ -93,7 +96,6 @@ async def process_image(request: ImageProcessRequest):
                 "prefilter_detail": ocr_result.detail,
             })
 
-        # OCR yeterli mi?
         receipt_data = None
         source = "gemini"
 
@@ -109,7 +111,6 @@ async def process_image(request: ImageProcessRequest):
                             event="ocr_sufficient", sender=sender,
                             ext_score=ocr_result.extraction_score)
 
-        # Gemini fallback
         if receipt_data is None:
             if ocr_result.decision in ("BYPASS", "ERROR_BYPASS"):
                 stats["prefilter_bypassed"] += 1
@@ -126,23 +127,21 @@ async def process_image(request: ImageProcessRequest):
         if receipt_data.hata:
             logger.warning("Görsel fiş değil", event="not_a_receipt",
                            sender=sender, error=receipt_data.hata)
+            add_error_record("NOT_A_RECEIPT", f"Görsel fiş değil: {receipt_data.hata}", sender, request_id)
             raise HTTPException(status_code=422, detail={
                 "success": False, "error_code": "NOT_A_RECEIPT",
                 "message": "Gönderilen görsel bir POS fişi değil",
             })
 
-        # Doğrulama
         confidence, warnings = validator.validate(receipt_data)
         if confidence < MIN_CONFIDENCE_WARN:
             logger.warning("Düşük güven skoru", event="low_confidence",
                            confidence=confidence, warnings=warnings)
 
-        # Excel'e yaz
         row_number = await excel_service.add_row(receipt_data, confidence, sender, source)
 
         processing_time = int((time.time() - start) * 1000)
 
-        # İstatistik güncelle
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         stats["total_processed"] += 1
         stats["processing_times"].append(processing_time)
@@ -151,7 +150,6 @@ async def process_image(request: ImageProcessRequest):
         if receipt_data.firma:
             stats["store_counts"][receipt_data.firma] += 1
 
-        # Son sorgulara ekle
         add_recent_query(
             request_id=request_id,
             receipt_data=receipt_data,
@@ -186,21 +184,31 @@ async def process_image(request: ImageProcessRequest):
     except BudgetExceededError:
         stats["total_errors"] += 1
         budget = gemini_service.budget
+        add_error_record("BUDGET_EXCEEDED", f"Aylık bütçe doldu (₺{budget.month_cost_tl:.2f}/₺{budget.budget_tl:.2f})", sender, request_id)
+        await notification_service.notify_gemini_failure(
+            "BUDGET_EXCEEDED",
+            f"₺{budget.month_cost_tl:.2f}/₺{budget.budget_tl:.2f}",
+        )
         raise HTTPException(status_code=429, detail={
             "success": False, "error_code": "BUDGET_EXCEEDED",
-            "message": f"Aylık bütçe doldu (₺{budget.month_cost_tl:.2f}/₺{budget.budget_tl:.2f})."})
+            "message": f"Aylık bütçe doldu (₺{budget.month_cost_tl:.2f}/₺{budget.budget_tl:.2f}). Yönetici ile iletişime geçin."})
     except GeminiRateLimitError:
         stats["total_errors"] += 1
+        add_error_record("RATE_LIMITED", "Gemini API rate limit aşıldı", sender, request_id)
+        await notification_service.notify_gemini_failure("RATE_LIMITED", "Rate limit aşıldı")
         raise HTTPException(status_code=429, detail={
             "success": False, "error_code": "RATE_LIMITED",
             "message": "Gemini API rate limit aşıldı. Birkaç dakika bekleyin."})
     except GeminiUnavailableError:
         stats["total_errors"] += 1
+        add_error_record("GEMINI_UNAVAILABLE", "AI servisi geçici olarak erişilemiyor", sender, request_id)
+        await notification_service.notify_gemini_failure("GEMINI_UNAVAILABLE", "Servis erişilemez")
         raise HTTPException(status_code=503, detail={
             "success": False, "error_code": "GEMINI_UNAVAILABLE",
-            "message": "AI servisi geçici olarak erişilemiyor"})
+            "message": "AI servisi geçici olarak erişilemiyor. Yönetici ile iletişime geçin."})
     except Exception as e:
         stats["total_errors"] += 1
+        add_error_record("INTERNAL_ERROR", f"Beklenmeyen hata: {str(e)}", sender, request_id)
         logger.exception("Beklenmeyen hata", event="unknown_error", error=str(e))
         raise HTTPException(status_code=500, detail={
             "success": False, "error_code": "INTERNAL_ERROR",

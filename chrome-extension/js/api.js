@@ -15,17 +15,27 @@ class FaturaAPI {
     this._pendingRequests = new Map();
   }
 
-  /* Chrome Storage */
+  /* Chrome Storage — tüm ayarlar chrome.storage.local'da kalıcı saklanır */
   async init() {
-    const sessionStore = chrome.storage.session || chrome.storage.local;
     return new Promise((resolve) => {
-      chrome.storage.local.get(['apiUrl', 'waUrl'], (local) => {
-        sessionStore.get(['apiKey'], (session) => {
-          this.baseUrl = (local.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
-          this.waBaseUrl = (local.waUrl || 'http://localhost:3001').replace(/\/+$/, '');
-          this.apiKey = session.apiKey || '';
+      chrome.storage.local.get(['apiUrl', 'waUrl', 'apiKey'], (data) => {
+        this.baseUrl = (data.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, '');
+        this.waBaseUrl = (data.waUrl || 'http://localhost:3001').replace(/\/+$/, '');
+        this.apiKey = data.apiKey || '';
+
+        // Tek seferlik migration: session → local
+        if (!data.apiKey && chrome.storage.session) {
+          chrome.storage.session.get(['apiKey'], (session) => {
+            if (session.apiKey) {
+              this.apiKey = session.apiKey;
+              chrome.storage.local.set({ apiKey: session.apiKey });
+              chrome.storage.session.remove(['apiKey']);
+            }
+            resolve();
+          });
+        } else {
           resolve();
-        });
+        }
       });
     });
   }
@@ -33,29 +43,27 @@ class FaturaAPI {
   async saveSettings(url, waUrl, key) {
     const normalizedUrl = url.replace(/\/v1\/?$/, '').replace(/\/+$/, '');
     const normalizedWaUrl = waUrl.replace(/\/+$/, '');
-    const sessionStore = chrome.storage.session || chrome.storage.local;
     return new Promise((resolve) => {
-      chrome.storage.local.set({ apiUrl: normalizedUrl, waUrl: normalizedWaUrl }, () => {
-        sessionStore.set({ apiKey: key }, () => {
-          this.baseUrl = normalizedUrl;
-          this.waBaseUrl = normalizedWaUrl;
-          this.apiKey = key;
-          resolve();
-        });
+      chrome.storage.local.set({
+        apiUrl: normalizedUrl,
+        waUrl: normalizedWaUrl,
+        apiKey: key
+      }, () => {
+        this.baseUrl = normalizedUrl;
+        this.waBaseUrl = normalizedWaUrl;
+        this.apiKey = key;
+        resolve();
       });
     });
   }
 
   async getSettings() {
-    const sessionStore = chrome.storage.session || chrome.storage.local;
     return new Promise((resolve) => {
-      chrome.storage.local.get(['apiUrl', 'waUrl'], (local) => {
-        sessionStore.get(['apiKey'], (session) => {
-          resolve({
-            apiUrl: (local.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, ''),
-            waUrl: (local.waUrl || 'http://localhost:3001').replace(/\/+$/, ''),
-            apiKey: session.apiKey || ''
-          });
+      chrome.storage.local.get(['apiUrl', 'waUrl', 'apiKey'], (data) => {
+        resolve({
+          apiUrl: (data.apiUrl || 'http://localhost:3000').replace(/\/v1\/?$/, '').replace(/\/+$/, ''),
+          waUrl: (data.waUrl || 'http://localhost:3001').replace(/\/+$/, ''),
+          apiKey: data.apiKey || ''
         });
       });
     });
@@ -179,11 +187,98 @@ class FaturaAPI {
     return this.request(`/recent-queries?limit=${limit}`);
   }
 
+  async getErrors(limit = 50) {
+    return this.request(`/errors?limit=${limit}`);
+  }
+
   async updateQueryRow(requestId, data) {
     return this.request(`/update-row/${requestId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
+  }
+
+  async deleteQueryRow(requestId) {
+    return this.request(`/delete-row/${requestId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /* Bildirimler */
+  async getNotifications() {
+    return this.request('/notifications');
+  }
+
+  async dismissNotification(notificationId = null) {
+    return this.request('/notifications/dismiss', {
+      method: 'POST',
+      body: JSON.stringify({ notification_id: notificationId }),
+    });
+  }
+
+  /* Terminal */
+  startTerminalStream(onLog, onOpen, onError) {
+    this.stopTerminalStream();
+
+    let url = `${this.baseUrl}/v1/terminal/stream`;
+    if (this.apiKey) {
+      url += `?api_key=${encodeURIComponent(this.apiKey)}`;
+    }
+
+    try {
+      this.terminalEventSource = new EventSource(url);
+    } catch (e) {
+      console.error('Failed to create terminal EventSource:', e);
+      if (onError) onError(new Error('Sunucuya bağlanılamadı'));
+      return;
+    }
+
+    let terminalHasReceived = false;
+    let terminalErrorCount = 0;
+    const maxTerminalErrors = 3;
+
+    this.terminalEventSource.onopen = () => {
+      console.log('Terminal stream connected');
+      terminalHasReceived = true;
+      terminalErrorCount = 0;
+      if (onOpen) onOpen();
+    };
+
+    this.terminalEventSource.onmessage = (event) => {
+      terminalHasReceived = true;
+      terminalErrorCount = 0;
+      try {
+        const data = JSON.parse(event.data);
+        if (onLog) onLog(data);
+      } catch (e) {
+        console.error('Terminal SSE parse error:', e);
+      }
+    };
+
+    this.terminalEventSource.onerror = (error) => {
+      console.error('Terminal SSE error:', error);
+      terminalErrorCount++;
+
+      if (!terminalHasReceived || terminalErrorCount > maxTerminalErrors) {
+        console.error('Terminal stream failed: server unreachable or too many errors');
+        this.stopTerminalStream();
+        if (onError) onError(new Error('Terminal stream bağlantısı kesildi'));
+        return;
+      }
+
+      if (onError) onError(error);
+    };
+  }
+
+  stopTerminalStream() {
+    if (this.terminalEventSource) {
+      this.terminalEventSource.close();
+      this.terminalEventSource = null;
+    }
+  }
+
+  async clearTerminalLogs() {
+    return this.request('/terminal/logs', { method: 'DELETE' });
   }
 
   /* Export */
@@ -203,6 +298,32 @@ class FaturaAPI {
   async exportAll(format = 'xlsx') {
     const endpoint = format && format !== 'xlsx' ? `/export-all?format=${format}` : '/export-all';
     return this.request(endpoint, { responseType: 'blob' });
+  }
+
+  /* Ayarlar (Settings) */
+  async getGeminiConfig() {
+    return this.request('/settings/gemini');
+  }
+
+  async updateGeminiConfig(apiKey, monthlyBudgetTl = null, usdTlRate = null) {
+    const payload = { api_key: apiKey };
+    if (monthlyBudgetTl !== null) payload.monthly_budget_tl = monthlyBudgetTl;
+    if (usdTlRate !== null) payload.usd_tl_rate = usdTlRate;
+    return this.request('/settings/gemini', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getAllowedJids() {
+    return this.request('/settings/jids');
+  }
+
+  async updateAllowedJids(jids) {
+    return this.request('/settings/jids', {
+      method: 'PUT',
+      body: JSON.stringify({ jids }),
+    });
   }
 
   /* WhatsApp Bridge */

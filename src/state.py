@@ -11,6 +11,25 @@ from src.config import EXCEL_DATA_DIR
 
 
 @dataclass
+class ErrorRecord:
+    """İşleme sırasında oluşan bir hata kaydı."""
+    timestamp: str
+    error_code: str
+    message: str
+    sender: Optional[str] = None
+    request_id: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "error_code": self.error_code,
+            "message": self.message,
+            "sender": self.sender,
+            "request_id": self.request_id,
+        }
+
+
+@dataclass
 class RecentQuery:
     request_id: str
     timestamp: str
@@ -55,6 +74,7 @@ class RecentQuery:
 
 
 recent_queries: deque[RecentQuery] = deque(maxlen=50)
+recent_errors: deque[ErrorRecord] = deque(maxlen=100)
 
 stats = {
     "total_processed": 0,
@@ -109,4 +129,20 @@ def add_recent_query(
         status=status,
         row_number=row_number,
         file_date=date.today().isoformat(),
+    ))
+
+
+def add_error_record(
+    error_code: str,
+    message: str,
+    sender: Optional[str] = None,
+    request_id: Optional[str] = None,
+):
+    """Hata kaydını recent_errors deque'una ekler."""
+    recent_errors.appendleft(ErrorRecord(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        error_code=error_code,
+        message=message,
+        sender=sender,
+        request_id=request_id,
     ))

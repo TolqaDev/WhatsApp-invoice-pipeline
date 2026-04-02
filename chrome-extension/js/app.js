@@ -10,6 +10,7 @@ class FaturaBotApp {
       isProcessing: false,
       waPollingInterval: null,
       waConnection: 'disconnected',
+      notificationPollingInterval: null,
     };
   }
 
@@ -28,6 +29,7 @@ class FaturaBotApp {
         this.state.apiReady = true;
         this.updateConnectionUI(true);
         this.loadDashboardData();
+        this.startNotificationPolling();
       } catch (e) {
         console.error('İlk bağlantı başarısız:', e);
         this.state.apiReady = false;
@@ -154,6 +156,15 @@ class FaturaBotApp {
     document.getElementById('refresh-budget')?.addEventListener('click', () => this.loadBudget());
     document.getElementById('refresh-health')?.addEventListener('click', () => this.loadHealth());
 
+    // Dashboard stat widget tıklama
+    document.querySelectorAll('.dash-stat-widget[data-stat]').forEach(widget => {
+      widget.addEventListener('click', () => this.onStatWidgetClick(widget.dataset.stat));
+    });
+
+    // Hata detay modal kapat
+    document.getElementById('error-detail-modal-close')?.addEventListener('click', () => this.closeErrorDetailModal());
+    document.getElementById('error-detail-backdrop')?.addEventListener('click', () => this.closeErrorDetailModal());
+
     // Fiş İşle
     this.setupProcessListeners();
 
@@ -199,6 +210,38 @@ class FaturaBotApp {
     document.getElementById('wa-refresh-status')?.addEventListener('click', () => this.loadWhatsAppTab());
     document.getElementById('wa-restart-btn')?.addEventListener('click', () => this.whatsAppRestart());
     document.getElementById('wa-logout-btn')?.addEventListener('click', () => this.whatsAppLogout());
+
+    // WhatsApp JID yönetimi
+    document.getElementById('wa-jid-add-btn')?.addEventListener('click', () => this.addJid());
+    document.getElementById('wa-jid-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this.addJid();
+    });
+    // JID kartı accordion toggle
+    document.getElementById('wa-jid-toggle')?.addEventListener('click', () => this.toggleJidCard());
+    // QR kartı accordion toggle
+    document.getElementById('wa-qr-toggle')?.addEventListener('click', () => this.toggleQrCard());
+
+    // Settings modal tabs
+    document.querySelectorAll('#settings-modal-tabs .modal-tab').forEach(tab => {
+      tab.addEventListener('click', () => this.switchSettingsTab(tab.dataset.settingsTab));
+    });
+
+    // Gemini ayarları
+    document.getElementById('toggle-gemini-key')?.addEventListener('click', () => this.toggleGeminiKeyVisibility());
+    document.getElementById('test-gemini')?.addEventListener('click', () => this.testGeminiConfig());
+    document.getElementById('save-gemini')?.addEventListener('click', () => this.saveGeminiConfig());
+
+    // Terminal
+    document.getElementById('open-terminal-btn')?.addEventListener('click', () => this.openTerminalPopup());
+    document.getElementById('terminal-close-btn')?.addEventListener('click', () => this.closeTerminalPopup());
+    document.getElementById('terminal-clear-btn')?.addEventListener('click', () => this.clearTerminalOutput());
+    document.getElementById('terminal-scroll-btn')?.addEventListener('click', () => {
+      const output = document.getElementById('terminal-output');
+      if (output) { output.scrollTop = output.scrollHeight; this._terminalAutoScroll = true; }
+    });
+
+    // Bildirim banner
+    document.getElementById('notification-banner-close')?.addEventListener('click', () => this.dismissNotifications());
   }
   setupProcessListeners() {
     const dropZone = document.getElementById('drop-zone');
@@ -362,6 +405,7 @@ class FaturaBotApp {
       utils.toast(`Python API bağlı! v${data.version}${waMsg}`, 'success');
       this.closeApiModal();
       this.loadDashboardData();
+      this.startNotificationPolling();
     } catch (e) {
       utils.toast('Bağlantı başarısız: ' + e.message, 'error');
     } finally {
@@ -387,6 +431,7 @@ class FaturaBotApp {
       utils.toast('Ayarlar kaydedildi ve bağlantı kuruldu!', 'success');
       this.closeApiModal();
       this.loadDashboardData();
+      this.startNotificationPolling();
     } catch (e) {
       utils.toast('Kaydedildi ama bağlantı kurulamadı: ' + e.message, 'warning');
       this.state.apiReady = false;
@@ -394,6 +439,111 @@ class FaturaBotApp {
       this.updateApiModalStatus();
     } finally {
       utils.setLoading('save-settings', false);
+    }
+  }
+
+  /* AYARLAR MODAL TAB GEÇİŞİ */
+  switchSettingsTab(tabId) {
+    document.querySelectorAll('#settings-modal-tabs .modal-tab').forEach(t => {
+      t.classList.toggle('active', t.dataset.settingsTab === tabId);
+    });
+    document.querySelectorAll('#api-modal .modal-tab-content').forEach(c => {
+      c.classList.toggle('active', c.dataset.settingsContent === tabId);
+    });
+    if (tabId === 'gemini') this.loadGeminiConfig();
+  }
+
+  /* GEMİNİ AYARLARI */
+  async loadGeminiConfig() {
+    const dot = document.getElementById('gemini-status-dot');
+    const text = document.getElementById('gemini-status-text');
+    const info = document.getElementById('gemini-info');
+    try {
+      const data = await api.getGeminiConfig();
+      if (data.active) {
+        dot.className = 'api-modal-status-dot connected';
+        text.textContent = `Gemini aktif — ${data.model || 'bilinmeyen model'}`;
+      } else {
+        dot.className = 'api-modal-status-dot error';
+        text.textContent = 'Gemini yapılandırılmamış';
+      }
+      // Mevcut bütçe ve kur bilgisini göster
+      if (data.monthly_budget_tl) {
+        document.getElementById('gemini-budget').value = data.monthly_budget_tl;
+      }
+      if (data.usd_tl_rate) {
+        document.getElementById('gemini-usd-rate').value = data.usd_tl_rate;
+      }
+      // Bilgi satırları
+      if (data.active) {
+        info.innerHTML = `
+          <div class="gemini-info-row"><i class="fas fa-robot"></i><span>Model</span><strong>${utils.escapeHtml(data.model || '-')}</strong></div>
+          <div class="gemini-info-row"><i class="fas fa-coins"></i><span>Ay Harcama</span><strong>${utils.formatCurrency(data.month_cost_tl || 0)}</strong></div>
+          <div class="gemini-info-row"><i class="fas fa-wallet"></i><span>Kalan Bütçe</span><strong>${utils.formatCurrency(data.remaining_tl || 0)}</strong></div>
+          <div class="gemini-info-row"><i class="fas fa-receipt"></i><span>Ay İşlem</span><strong>${data.month_count || 0} fiş</strong></div>
+        `;
+      } else {
+        info.innerHTML = '';
+      }
+    } catch (e) {
+      dot.className = 'api-modal-status-dot error';
+      text.textContent = 'Gemini durumu alınamadı';
+      info.innerHTML = '';
+    }
+  }
+
+  toggleGeminiKeyVisibility() {
+    const input = document.getElementById('gemini-api-key');
+    const icon = document.querySelector('#toggle-gemini-key i');
+    if (input.type === 'password') { input.type = 'text'; icon.className = 'fas fa-eye-slash'; }
+    else { input.type = 'password'; icon.className = 'fas fa-eye'; }
+  }
+
+  async testGeminiConfig() {
+    const apiKey = document.getElementById('gemini-api-key').value.trim();
+    if (!apiKey || apiKey.length < 10) {
+      utils.toast('Geçerli bir Gemini API anahtarı girin', 'warning');
+      return;
+    }
+    utils.setLoading('test-gemini', true, 'Test ediliyor...');
+    try {
+      const budget = parseFloat(document.getElementById('gemini-budget').value) || 200;
+      const rate = parseFloat(document.getElementById('gemini-usd-rate').value) || 45;
+      const result = await api.updateGeminiConfig(apiKey, budget, rate);
+      if (result.success) {
+        utils.toast(`Gemini bağlandı! Model: ${result.model}`, 'success');
+        this.loadGeminiConfig();
+      } else {
+        utils.toast('Gemini yapılandırma başarısız', 'error');
+      }
+    } catch (e) {
+      utils.toast('Gemini test hatası: ' + e.message, 'error');
+    } finally {
+      utils.setLoading('test-gemini', false);
+    }
+  }
+
+  async saveGeminiConfig() {
+    const apiKey = document.getElementById('gemini-api-key').value.trim();
+    if (!apiKey || apiKey.length < 10) {
+      utils.toast('Geçerli bir Gemini API anahtarı girin', 'warning');
+      return;
+    }
+    utils.setLoading('save-gemini', true, 'Kaydediliyor...');
+    try {
+      const budget = parseFloat(document.getElementById('gemini-budget').value) || 200;
+      const rate = parseFloat(document.getElementById('gemini-usd-rate').value) || 45;
+      const result = await api.updateGeminiConfig(apiKey, budget, rate);
+      if (result.success) {
+        utils.toast('Gemini ayarları kaydedildi!', 'success');
+        this.loadGeminiConfig();
+      } else {
+        utils.toast('Gemini kaydetme başarısız', 'error');
+      }
+    } catch (e) {
+      utils.toast('Gemini kaydetme hatası: ' + e.message, 'error');
+    } finally {
+      utils.setLoading('save-gemini', false);
     }
   }
 
@@ -444,6 +594,102 @@ class FaturaBotApp {
     container.innerHTML = stores.map((name, i) => `
       <div class="top-store-item"><span class="top-store-rank">${i + 1}</span><span class="top-store-name">${utils.escapeHtml(name)}</span></div>
     `).join('');
+  }
+
+  /* STAT WIDGET TIKLAMA */
+  onStatWidgetClick(statType) {
+    switch (statType) {
+      case 'total':
+        this.switchTab('queries');
+        break;
+      case 'today':
+        this.switchTab('queries');
+        // Tarih filtresini bugüne ayarla
+        setTimeout(() => {
+          const today = new Date().toISOString().split('T')[0];
+          const fromEl = document.getElementById('queries-date-from');
+          const toEl = document.getElementById('queries-date-to');
+          if (fromEl) fromEl.value = today;
+          if (toEl) toEl.value = today;
+          this.filterQueries();
+        }, 200);
+        break;
+      case 'errors':
+        this.openErrorDetailModal();
+        break;
+      case 'excel':
+        this.switchTab('export');
+        break;
+    }
+  }
+
+  /* HATA DETAY MODALI */
+  async openErrorDetailModal() {
+    const modal = document.getElementById('error-detail-modal');
+    const backdrop = document.getElementById('error-detail-backdrop');
+    const body = document.getElementById('error-detail-modal-body');
+
+    body.innerHTML = '<div class="error-list-loading"><i class="fas fa-spinner fa-spin"></i> Yükleniyor...</div>';
+    backdrop.classList.remove('hidden');
+    modal.classList.remove('hidden');
+    setTimeout(() => { backdrop.classList.add('visible'); modal.classList.add('visible'); }, 10);
+
+    try {
+      const data = await api.getErrors(50);
+      this.renderErrorList(data);
+    } catch (e) {
+      body.innerHTML = `<div class="error-list-empty"><i class="fas fa-exclamation-circle"></i><p>Hatalar yüklenemedi: ${utils.escapeHtml(e.message)}</p></div>`;
+    }
+  }
+
+  renderErrorList(data) {
+    const body = document.getElementById('error-detail-modal-body');
+    const errors = data.errors || [];
+
+    if (!errors.length) {
+      body.innerHTML = '<div class="error-list-empty"><i class="fas fa-check-circle" style="color:var(--success)"></i><p>Hiç hata kaydı yok!</p></div>';
+      return;
+    }
+
+    const summary = `<div class="error-summary">
+      <span class="error-summary-item"><i class="fas fa-exclamation-triangle"></i> Toplam: <strong>${data.total}</strong></span>
+      <span class="error-summary-item"><i class="fas fa-calendar-day"></i> Bugün: <strong>${data.today_count}</strong></span>
+    </div>`;
+
+    const errorCodeLabels = {
+      'NOT_A_RECEIPT': { label: 'Fiş Değil', cls: 'warn' },
+      'BUDGET_EXCEEDED': { label: 'Bütçe Doldu', cls: 'critical' },
+      'RATE_LIMITED': { label: 'Rate Limit', cls: 'warn' },
+      'GEMINI_UNAVAILABLE': { label: 'AI Erişilemez', cls: 'critical' },
+      'INTERNAL_ERROR': { label: 'Sunucu Hatası', cls: 'critical' },
+      'IMAGE_TOO_LARGE': { label: 'Büyük Görsel', cls: 'warn' },
+      'INVALID_BASE64': { label: 'Geçersiz Veri', cls: 'warn' },
+    };
+
+    const list = errors.map(e => {
+      const codeInfo = errorCodeLabels[e.error_code] || { label: e.error_code, cls: 'warn' };
+      const time = e.timestamp
+        ? new Date(e.timestamp).toLocaleString('tr-TR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : '-';
+      return `<div class="error-list-item">
+        <div class="error-list-item-header">
+          <span class="error-code-badge ${codeInfo.cls}">${codeInfo.label}</span>
+          <span class="error-list-time"><i class="fas fa-clock"></i> ${time}</span>
+        </div>
+        <div class="error-list-item-msg">${utils.escapeHtml(e.message)}</div>
+        ${e.sender ? `<span class="error-list-sender"><i class="fas fa-user"></i> ${utils.escapeHtml(e.sender)}</span>` : ''}
+      </div>`;
+    }).join('');
+
+    body.innerHTML = summary + '<div class="error-list-scroll">' + list + '</div>';
+  }
+
+  closeErrorDetailModal() {
+    const modal = document.getElementById('error-detail-modal');
+    const backdrop = document.getElementById('error-detail-backdrop');
+    modal.classList.remove('visible');
+    backdrop.classList.remove('visible');
+    setTimeout(() => { modal.classList.add('hidden'); backdrop.classList.add('hidden'); }, 300);
   }
 
   async loadBudget() {
@@ -623,7 +869,7 @@ class FaturaBotApp {
     }
 
     // ── 4) Background service worker'ı tetikle ──
-    chrome.runtime.sendMessage({ command: 'START_QUEUE' }, (response) => {
+    chrome.runtime.sendMessage({ command: 'START_QUEUE' }, () => {
       if (chrome.runtime.lastError) {
         console.error('SW tetikleme hatası:', chrome.runtime.lastError.message);
         // Fallback: SW ulaşılamıyorsa popup'ta dene (eski davranış)
@@ -1045,8 +1291,7 @@ class FaturaBotApp {
         if (parts.length !== 3) return false;
         const isoDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
         if (dateFrom && isoDate < dateFrom) return false;
-        if (dateTo && isoDate > dateTo) return false;
-        return true;
+        return !(dateTo && isoDate > dateTo);
       });
     }
 
@@ -1054,9 +1299,27 @@ class FaturaBotApp {
   }
 
   /* SORGU DETAY POPUP */
+
+  // Masraf ve ödeme seçenekleri (backend MASRAF_HESAP_KODU / ODEME_HESAP_KODU ile eşleşmeli)
+  static MASRAF_OPTIONS = ['Market', 'Yemek', 'Akaryakıt', 'Kırtasiye', 'Giyim', 'Ulaşım', 'Konaklama', 'Teknoloji', 'Sağlık', 'Temizlik', 'Otopark', 'Diğer'];
+  static ODEME_OPTIONS = ['NAKİT', 'KART', 'HAVALE'];
+  static KDV_ORAN_OPTIONS = ['%1', '%8', '%10', '%18', '%20'];
+
   openDetailModal(query, idx) {
     this._editingQueryIdx = idx;
     this._editingQuery = { ...query };
+
+    const masrafOptions = FaturaBotApp.MASRAF_OPTIONS.map(m =>
+      `<option value="${m}" ${(query.masraf || '') === m ? 'selected' : ''}>${m}</option>`
+    ).join('');
+
+    const odemeOptions = FaturaBotApp.ODEME_OPTIONS.map(o =>
+      `<option value="${o}" ${(query.odeme || '').toUpperCase() === o ? 'selected' : ''}>${o}</option>`
+    ).join('');
+
+    const kdvOranOptions = FaturaBotApp.KDV_ORAN_OPTIONS.map(k =>
+      `<option value="${k}" ${(query.kdv_oran || '') === k ? 'selected' : ''}>${k}</option>`
+    ).join('');
 
     const body = document.getElementById('detail-modal-body');
     body.innerHTML = `
@@ -1090,36 +1353,46 @@ class FaturaBotApp {
         </div>
         <div class="detail-field-row">
           <div class="detail-field">
-            <label><i class="fas fa-calculator"></i> Matrah</label>
-            <input type="number" step="0.01" id="edit-matrah" value="${query.matrah || 0}">
-          </div>
-          <div class="detail-field">
-            <label><i class="fas fa-percentage"></i> KDV Oranı</label>
-            <input type="text" id="edit-kdv-oran" value="${utils.escapeHtml(query.kdv_oran || '')}" placeholder="%8, %18...">
-          </div>
-        </div>
-        <div class="detail-field-row">
-          <div class="detail-field">
-            <label><i class="fas fa-coins"></i> KDV Tutarı</label>
-            <input type="number" step="0.01" id="edit-kdv-tutar" value="${query.kdv_tutar || 0}">
-          </div>
-          <div class="detail-field">
             <label><i class="fas fa-lira-sign"></i> Toplam</label>
             <input type="number" step="0.01" id="edit-toplam" value="${query.toplam || 0}">
           </div>
+          <div class="detail-field">
+            <label><i class="fas fa-percentage"></i> KDV Oranı</label>
+            <select id="edit-kdv-oran">
+              <option value="">Seçiniz</option>
+              ${kdvOranOptions}
+            </select>
+          </div>
         </div>
         <div class="detail-field-row">
           <div class="detail-field">
-            <label><i class="fas fa-credit-card"></i> Ödeme</label>
-            <input type="text" id="edit-odeme" value="${utils.escapeHtml(query.odeme || '')}">
+            <label><i class="fas fa-calculator"></i> Matrah <span class="detail-auto-badge" id="matrah-auto-badge"></span></label>
+            <input type="number" step="0.01" id="edit-matrah" value="${query.matrah || 0}">
           </div>
           <div class="detail-field">
+            <label><i class="fas fa-coins"></i> KDV Tutarı <span class="detail-auto-badge" id="kdv-auto-badge"></span></label>
+            <input type="number" step="0.01" id="edit-kdv-tutar" value="${query.kdv_tutar || 0}">
+          </div>
+        </div>
+        <div class="detail-field-row">
+          <div class="detail-field">
             <label><i class="fas fa-tag"></i> Masraf Türü</label>
-            <input type="text" id="edit-masraf" value="${utils.escapeHtml(query.masraf || '')}">
+            <select id="edit-masraf">
+              <option value="">Seçiniz</option>
+              ${masrafOptions}
+            </select>
+          </div>
+          <div class="detail-field">
+            <label><i class="fas fa-credit-card"></i> Ödeme</label>
+            <select id="edit-odeme">
+              ${odemeOptions}
+            </select>
           </div>
         </div>
       </div>
       <div class="detail-actions">
+        <button class="btn btn-danger btn-sm" id="detail-delete-btn"><i class="fas fa-trash-alt"></i> Sil</button>
+        <div style="flex:1"></div>
         <button class="btn btn-outline btn-sm" id="detail-cancel-btn"><i class="fas fa-times"></i> Kapat</button>
         <button class="btn btn-primary btn-sm" id="detail-save-btn"><i class="fas fa-edit"></i> Güncelle</button>
       </div>
@@ -1128,6 +1401,32 @@ class FaturaBotApp {
     // Etkinlikler
     document.getElementById('detail-cancel-btn').addEventListener('click', () => this.closeDetailModal());
     document.getElementById('detail-save-btn').addEventListener('click', () => this.saveQueryEdit());
+    document.getElementById('detail-delete-btn').addEventListener('click', () => this.deleteQueryFromDetail());
+
+    // Otomatik matrah/kdv hesaplama — toplam veya kdv oranı değiştiğinde
+    const toplamEl = document.getElementById('edit-toplam');
+    const kdvOranEl = document.getElementById('edit-kdv-oran');
+    const matrahEl = document.getElementById('edit-matrah');
+    const kdvTutarEl = document.getElementById('edit-kdv-tutar');
+
+    const autoCalc = () => {
+      const toplam = parseFloat(toplamEl.value) || 0;
+      const oranStr = kdvOranEl.value;
+      if (!oranStr || !toplam) return;
+      const m = oranStr.match(/(\d+)/);
+      if (!m) return;
+      const oranDecimal = parseInt(m[1]) / 100;
+      const matrah = Math.round((toplam / (1 + oranDecimal)) * 100) / 100;
+      const kdvTutar = Math.round((toplam - matrah) * 100) / 100;
+      matrahEl.value = matrah.toFixed(2);
+      kdvTutarEl.value = kdvTutar.toFixed(2);
+      // Otomatik hesaplama göstergesi
+      document.getElementById('matrah-auto-badge').textContent = '(otomatik)';
+      document.getElementById('kdv-auto-badge').textContent = '(otomatik)';
+    };
+
+    toplamEl.addEventListener('input', autoCalc);
+    kdvOranEl.addEventListener('change', autoCalc);
 
     const modal = document.getElementById('detail-modal');
     const backdrop = document.getElementById('detail-backdrop');
@@ -1175,6 +1474,34 @@ class FaturaBotApp {
       utils.toast('Kaydetme hatası: ' + e.message, 'error');
     } finally {
       utils.setLoading('detail-save-btn', false);
+    }
+  }
+
+  async deleteQueryFromDetail() {
+    if (!this._editingQuery) return;
+
+    const ok = await this.showConfirm(
+      `"${this._editingQuery.firma || 'Bu fiş'}" kaydını silmek istiyor musunuz?\n\nExcel dosyasından da kaldırılacaktır.`
+    );
+    if (!ok) return;
+
+    utils.setLoading('detail-delete-btn', true, 'Siliniyor...');
+
+    try {
+      const result = await api.deleteQueryRow(this._editingQuery.request_id);
+
+      // Bellekteki listeyi güncelle
+      if (this._queriesData && this._editingQueryIdx !== undefined) {
+        this._queriesData.splice(this._editingQueryIdx, 1);
+        this.renderQueries(this._queriesData);
+      }
+
+      utils.toast(result.message || 'Fiş silindi', 'success');
+      this.closeDetailModal();
+    } catch (e) {
+      utils.toast('Silme hatası: ' + e.message, 'error');
+    } finally {
+      utils.setLoading('detail-delete-btn', false);
     }
   }
 
@@ -1312,16 +1639,54 @@ class FaturaBotApp {
 
   /* WHATSAPP */
 
+  showWhatsAppConnected() {
+    const qrCard = document.getElementById('wa-qr-card');
+    const qrImage = document.getElementById('wa-qr-image');
+    const placeholder = document.getElementById('wa-qr-placeholder');
+
+    qrCard.classList.add('connected-state');
+    qrCard.classList.remove('open');
+    qrImage.classList.add('hidden');
+    placeholder.classList.add('hidden');
+
+    const headerSpan = qrCard.querySelector('.wa-qr-header span');
+    if (headerSpan) {
+      headerSpan.innerHTML = 'QR Kod ile Giriş <span class="wa-connected-status-line"><i class="fas fa-check-circle"></i> Bağlı</span>';
+    }
+  }
+
+  hideWhatsAppConnected() {
+    const qrCard = document.getElementById('wa-qr-card');
+    if (qrCard) {
+      qrCard.classList.remove('connected-state');
+      const headerSpan = qrCard.querySelector('.wa-qr-header span');
+      if (headerSpan) headerSpan.textContent = 'QR Kod ile Giriş';
+    }
+  }
+
+  showWhatsAppQRPlaceholder(message) {
+    const qrImage = document.getElementById('wa-qr-image');
+    const placeholder = document.getElementById('wa-qr-placeholder');
+    const qrCard = document.getElementById('wa-qr-card');
+
+    qrCard.classList.remove('connected-state');
+    qrCard.classList.add('open');
+    qrImage.classList.add('hidden');
+    placeholder.classList.remove('hidden');
+    placeholder.querySelector('p').textContent = message || 'QR kod yükleniyor...';
+    this.hideWhatsAppConnected();
+  }
+
   async loadWhatsAppTab() {
     try {
       const status = await api.getWhatsAppStatus();
       this.state.waConnection = status.connection || 'disconnected';
       this.updateWhatsAppStatusUI(status);
+      this.loadAllowedJids(status.allowedJids);
 
       if (status.connection === 'connected') {
         this.showWhatsAppConnected(status);
       } else {
-        // Bağlı değilse "WhatsApp Bağlı" mesajını mutlaka gizle
         this.hideWhatsAppConnected();
         await this.loadWhatsAppQR();
       }
@@ -1329,6 +1694,7 @@ class FaturaBotApp {
       this.state.waConnection = 'disconnected';
       this.updateWhatsAppStatusUI({ connection: 'disconnected' });
       this.hideWhatsAppConnected();
+      this.updateJidCardState(false);
       this.showWhatsAppQRPlaceholder('Köprü bağlantısı kurulamadı');
     }
   }
@@ -1340,7 +1706,7 @@ class FaturaBotApp {
     const phoneEl = document.getElementById('wa-phone');
     const uptimeEl = document.getElementById('wa-uptime');
     const lastEl = document.getElementById('wa-last-processed');
-    const jidEl = document.getElementById('wa-allowed-jids');
+    const statusCard = document.getElementById('wa-status-card');
     const restartBtn = document.getElementById('wa-restart-btn');
     const logoutBtn = document.getElementById('wa-logout-btn');
 
@@ -1348,7 +1714,8 @@ class FaturaBotApp {
     const isConnected = conn === 'connected';
     const isDisconnected = conn === 'disconnected';
 
-    // Badge
+    statusCard.classList.toggle('connected', isConnected);
+
     badgeEl.className = 'wa-status-badge ' + conn;
     const labels = {
       connected: '● Bağlı',
@@ -1358,25 +1725,18 @@ class FaturaBotApp {
     };
     badgeEl.textContent = labels[conn] || conn;
 
-    // Icon
     iconEl.className = 'wa-status-icon';
     if (isConnected) iconEl.classList.add('connected');
     else if (isDisconnected) iconEl.classList.add('disconnected');
 
-    // Title
     titleEl.textContent = isConnected ? 'WhatsApp Bağlı' : 'WhatsApp Bağlantısı';
 
-    // Details
     phoneEl.textContent = status.phoneNumber ? `+${status.phoneNumber}` : '-';
     uptimeEl.textContent = status.uptimeFormatted || '-';
     lastEl.textContent = status.lastProcessedAt
       ? new Date(status.lastProcessedAt).toLocaleTimeString('tr-TR')
       : '-';
-    jidEl.textContent = status.allowedJids?.length
-      ? status.allowedJids.map(j => j.replace('@s.whatsapp.net', '')).join(', ')
-      : 'Hepsi';
 
-    // Buton durumları
     restartBtn.innerHTML = isConnected
       ? '<i class="fas fa-redo"></i> Yeniden Bağlan'
       : '<i class="fas fa-plug"></i> Bağlan';
@@ -1384,6 +1744,38 @@ class FaturaBotApp {
     logoutBtn.disabled = !isConnected;
     logoutBtn.style.opacity = isConnected ? '' : '0.4';
     logoutBtn.style.pointerEvents = isConnected ? '' : 'none';
+
+    this.updateJidCardState(isConnected);
+  }
+
+  updateJidCardState(isConnected) {
+    const jidCard = document.getElementById('wa-jid-card');
+    const subtitle = document.getElementById('wa-jid-subtitle');
+    if (!jidCard) return;
+
+    if (isConnected) {
+      jidCard.classList.remove('disabled');
+      const count = this._currentJids?.length || 0;
+      subtitle.textContent = count > 0
+        ? `${count} numara tanımlı — düzenlemek için tıklayın`
+        : 'Mesaj kabul edilecek numaralar — tıklayarak düzenleyin';
+    } else {
+      jidCard.classList.add('disabled');
+      jidCard.classList.remove('open');
+      subtitle.textContent = 'WhatsApp bağlantısı gerekli';
+    }
+  }
+
+  toggleJidCard() {
+    const jidCard = document.getElementById('wa-jid-card');
+    if (!jidCard || jidCard.classList.contains('disabled')) return;
+    jidCard.classList.toggle('open');
+  }
+
+  toggleQrCard() {
+    const qrCard = document.getElementById('wa-qr-card');
+    if (!qrCard || qrCard.classList.contains('connected-state')) return;
+    qrCard.classList.toggle('open');
   }
 
   async loadWhatsAppQR() {
@@ -1392,6 +1784,7 @@ class FaturaBotApp {
     const placeholder = document.getElementById('wa-qr-placeholder');
 
     qrCard.classList.remove('connected-state');
+    qrCard.classList.add('open');
 
     try {
       const data = await api.getWhatsAppQR();
@@ -1413,49 +1806,6 @@ class FaturaBotApp {
     }
   }
 
-  showWhatsAppQRPlaceholder(message) {
-    const qrImage = document.getElementById('wa-qr-image');
-    const placeholder = document.getElementById('wa-qr-placeholder');
-    const qrCard = document.getElementById('wa-qr-card');
-
-    qrCard.classList.remove('connected-state');
-    qrImage.classList.add('hidden');
-    placeholder.classList.remove('hidden');
-    placeholder.querySelector('p').textContent = message || 'QR kod yükleniyor...';
-    this.hideWhatsAppConnected();
-  }
-
-  hideWhatsAppConnected() {
-    const connMsg = document.querySelector('.wa-connected-msg');
-    if (connMsg) connMsg.style.display = 'none';
-  }
-
-  showWhatsAppConnected(status) {
-    const qrCard = document.getElementById('wa-qr-card');
-    const qrImage = document.getElementById('wa-qr-image');
-    const placeholder = document.getElementById('wa-qr-placeholder');
-    const body = document.getElementById('wa-qr-body');
-
-    qrCard.classList.add('connected-state');
-    qrImage.classList.add('hidden');
-    placeholder.classList.add('hidden');
-
-    // Connected mesajı göster
-    let connMsg = body.querySelector('.wa-connected-msg');
-    if (!connMsg) {
-      connMsg = document.createElement('div');
-      connMsg.className = 'wa-connected-msg';
-      connMsg.innerHTML = `
-        <i class="fas fa-check-circle"></i>
-        <p>WhatsApp Bağlı</p>
-        <span></span>
-      `;
-      body.appendChild(connMsg);
-    }
-    connMsg.style.display = '';
-    const phone = status.phoneNumber ? `+${status.phoneNumber}` : '';
-    connMsg.querySelector('span').textContent = phone ? `${phone} numarası ile aktif` : 'Oturum aktif';
-  }
 
   startWhatsAppPolling() {
     this.stopWhatsAppPolling();
@@ -1505,11 +1855,241 @@ class FaturaBotApp {
       this.state.waConnection = 'disconnected';
       this.updateWhatsAppStatusUI({ connection: 'disconnected' });
       this.hideWhatsAppConnected();
+      this.updateJidCardState(false);
       this.showWhatsAppQRPlaceholder('Oturum kapatıldı — yeniden bağlanın');
     } catch (e) {
       utils.toast('Çıkış hatası: ' + e.message, 'error');
     } finally {
       utils.setLoading('wa-logout-btn', false);
+    }
+  }
+
+  /* JID YÖNETİMİ */
+  loadAllowedJids(jids) {
+    this._currentJids = (jids || []).map(j => j.replace('@s.whatsapp.net', ''));
+    this.renderJidList();
+    const isConnected = this.state.waConnection === 'connected';
+    this.updateJidCardState(isConnected);
+  }
+
+  renderJidList() {
+    const container = document.getElementById('wa-jid-list');
+    if (!this._currentJids || this._currentJids.length === 0) {
+      container.innerHTML = '<div class="wa-jid-empty"><i class="fas fa-globe"></i> Tüm numaralar (filtresiz)</div>';
+      return;
+    }
+    container.innerHTML = this._currentJids.map((num, idx) => {
+      const formatted = num.length > 5 ? `+${num.slice(0, 2)} ${num.slice(2, 5)} ${num.slice(5)}` : num;
+      return `<span class="wa-jid-edit-chip" title="${utils.escapeHtml(num)}">
+        <i class="fas fa-user"></i> ${utils.escapeHtml(formatted)}
+        <button class="wa-jid-remove" data-idx="${idx}" title="Kaldır"><i class="fas fa-times"></i></button>
+      </span>`;
+    }).join('');
+
+    // Kaldır butonları
+    container.querySelectorAll('.wa-jid-remove').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.removeJid(parseInt(btn.dataset.idx));
+      });
+    });
+  }
+
+  async addJid() {
+    const input = document.getElementById('wa-jid-input');
+    let value = input.value.trim().replace(/\s+/g, '').replace(/^\+/, '');
+    if (!value) {
+      utils.toast('Numara girin', 'warning');
+      return;
+    }
+    // Temel format kontrolü
+    if (!/^\d{10,15}$/.test(value)) {
+      utils.toast('Geçersiz numara formatı. Örnek: 905xxxxxxxxx', 'warning');
+      return;
+    }
+    // Tekrar kontrolü
+    if (this._currentJids && this._currentJids.includes(value)) {
+      utils.toast('Bu numara zaten listede', 'warning');
+      return;
+    }
+
+    if (!this._currentJids) this._currentJids = [];
+    this._currentJids.push(value);
+    this.renderJidList();
+    this.updateJidCardState(true);
+    input.value = '';
+
+    await this.saveJids();
+  }
+
+  async removeJid(idx) {
+    if (!this._currentJids || idx < 0 || idx >= this._currentJids.length) return;
+    const removed = this._currentJids.splice(idx, 1)[0];
+    this.renderJidList();
+    this.updateJidCardState(true);
+    await this.saveJids();
+    utils.toast(`${removed} kaldırıldı`, 'info');
+  }
+
+  async saveJids() {
+    try {
+      const result = await api.updateAllowedJids(this._currentJids || []);
+      if (result.success) {
+        utils.toast(`${result.allowedJids?.length || 0} numara güncellendi`, 'success');
+      }
+    } catch (e) {
+      utils.toast('JID güncelleme hatası: ' + e.message, 'error');
+    }
+  }
+
+  /* BİLDİRİM POLLİNG */
+  startNotificationPolling() {
+    this.stopNotificationPolling();
+    this.checkNotifications();
+    this.state.notificationPollingInterval = setInterval(() => this.checkNotifications(), 30000);
+  }
+
+  stopNotificationPolling() {
+    if (this.state.notificationPollingInterval) {
+      clearInterval(this.state.notificationPollingInterval);
+      this.state.notificationPollingInterval = null;
+    }
+  }
+
+  async checkNotifications() {
+    if (!this.state.apiReady) return;
+    try {
+      const data = await api.getNotifications();
+      const banner = document.getElementById('notification-banner');
+      const text = document.getElementById('notification-banner-text');
+      if (data.count > 0) {
+        const latest = data.notifications[0];
+        text.textContent = latest.message;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    } catch {
+    }
+  }
+
+  async dismissNotifications() {
+    const banner = document.getElementById('notification-banner');
+    banner.classList.add('hidden');
+    try {
+      await api.dismissNotification(null);
+    } catch (e) {
+      console.error('Bildirim kapatma hatası:', e);
+    }
+  }
+
+  /* TERMİNAL LOG */
+  openTerminalPopup() {
+    const popup = document.getElementById('terminal-popup');
+    const status = document.getElementById('terminal-status');
+    const output = document.getElementById('terminal-output');
+
+    if (!popup) return;
+
+    popup.classList.remove('hidden');
+
+    status.className = 'terminal-popup-status';
+    status.innerHTML = '<span class="terminal-status-dot"></span><span>Bağlanıyor...</span>';
+    output.innerHTML = '<div class="terminal-empty"><i class="fas fa-terminal"></i><span>Log akışı başlatılıyor...</span></div>';
+
+    this._terminalAutoScroll = true;
+
+    output.addEventListener('scroll', () => {
+      this._terminalAutoScroll = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
+    });
+
+    api.startTerminalStream(
+      (logEntry) => {
+        this.appendTerminalLog(logEntry);
+      },
+      () => {
+        status.className = 'terminal-popup-status connected';
+        status.innerHTML = '<span class="terminal-status-dot"></span><span>Bağlı — Canlı log akışı</span>';
+        const empty = output.querySelector('.terminal-empty');
+        if (empty) empty.remove();
+      },
+      (error) => {
+        console.error('Terminal stream error:', error);
+        status.className = 'terminal-popup-status error';
+        status.innerHTML = '<span class="terminal-status-dot"></span><span>Bağlantı kesildi</span>';
+      }
+    );
+  }
+
+  closeTerminalPopup() {
+    const popup = document.getElementById('terminal-popup');
+    if (popup) popup.classList.add('hidden');
+    api.stopTerminalStream();
+  }
+
+  async clearTerminalOutput() {
+    const output = document.getElementById('terminal-output');
+    if (output) {
+      output.innerHTML = '<div class="terminal-empty"><i class="fas fa-terminal"></i><span>Log temizlendi</span></div>';
+    }
+    try {
+      await api.clearTerminalLogs();
+    } catch (error) {
+      console.error('Failed to clear server logs:', error);
+    }
+  }
+
+  appendTerminalLog(entry) {
+    const output = document.getElementById('terminal-output');
+    if (!output) return;
+
+    const empty = output.querySelector('.terminal-empty');
+    if (empty) empty.remove();
+
+    const line = document.createElement('div');
+    line.className = 'terminal-line';
+
+    const time = entry.timestamp
+      ? new Date(entry.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      : '';
+
+    const level = (entry.level || 'info').toLowerCase();
+    const category = entry.category || 'system';
+    const message = entry.message || '';
+    const hasData = entry.data && Object.keys(entry.data).length > 0;
+
+    line.innerHTML = `
+      <span class="terminal-time">${utils.escapeHtml(time)}</span>
+      <span class="terminal-level ${level}">${level}</span>
+      <span class="terminal-category">${utils.escapeHtml(category)}</span>
+      <span class="terminal-msg">${utils.escapeHtml(message)}</span>
+      ${hasData ? `<span class="terminal-data" title="${utils.escapeHtml(JSON.stringify(entry.data))}"><i class="fas fa-ellipsis-h"></i></span>` : ''}
+    `;
+
+    if (hasData) {
+      const dataBtn = line.querySelector('.terminal-data');
+      dataBtn?.addEventListener('click', () => {
+        const formatted = JSON.stringify(entry.data, null, 2);
+        const pre = document.createElement('div');
+        pre.style.cssText = 'padding:4px 8px;margin:2px 0 4px 100px;background:var(--bg-input);border-radius:4px;font-size:10px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-all;border:1px solid var(--border)';
+        pre.textContent = formatted;
+        if (line.nextElementSibling?.dataset?.dataExpanded) {
+          line.nextElementSibling.remove();
+        } else {
+          pre.dataset.dataExpanded = 'true';
+          line.after(pre);
+        }
+      });
+    }
+
+    output.appendChild(line);
+
+    while (output.children.length > 500) {
+      output.removeChild(output.firstChild);
+    }
+
+    if (this._terminalAutoScroll) {
+      output.scrollTop = output.scrollHeight;
     }
   }
 

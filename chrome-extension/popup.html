@@ -73,12 +73,22 @@
           <h1 id="page-title" class="topbar-title">Kontrol Paneli</h1>
         </div>
         <div class="topbar-right">
+          <button class="icon-btn-sm terminal-btn" id="open-terminal-btn" title="Terminal Log"><i class="fas fa-terminal"></i></button>
           <div id="connection-status" class="conn-pill disconnected">
             <span class="conn-dot"></span>
             <span class="badge-text">Bağlı Değil</span>
           </div>
         </div>
       </header>
+
+      <!-- ── NOTIFICATION BANNER ── -->
+      <div class="notification-banner hidden" id="notification-banner">
+        <div class="notification-banner-content">
+          <i class="fas fa-exclamation-triangle"></i>
+          <span id="notification-banner-text">Uyarı mesajı</span>
+        </div>
+        <button class="notification-banner-close" id="notification-banner-close" title="Kapat"><i class="fas fa-times"></i></button>
+      </div>
 
       <!-- ── CONTENT AREA ── -->
       <main class="content-area">
@@ -87,10 +97,16 @@
         <div class="modal-backdrop hidden" id="api-modal-backdrop"></div>
         <div class="modal hidden" id="api-modal">
           <div class="modal-header">
-            <h3><i class="fas fa-server"></i> Sunucu Ayarları</h3>
+            <h3><i class="fas fa-cog"></i> Ayarlar</h3>
             <button class="modal-close" id="api-modal-close"><i class="fas fa-times"></i></button>
           </div>
-          <div class="modal-body">
+          <!-- Tabs -->
+          <div class="modal-tabs" id="settings-modal-tabs">
+            <button class="modal-tab active" data-settings-tab="connection"><i class="fas fa-server"></i> Bağlantı</button>
+            <button class="modal-tab" data-settings-tab="gemini"><i class="fas fa-robot"></i> Gemini AI</button>
+          </div>
+          <!-- Bağlantı Tab -->
+          <div class="modal-body modal-tab-content active" id="settings-tab-connection" data-settings-content="connection">
             <div class="modal-status" id="api-modal-status">
               <span class="api-modal-status-dot" id="api-modal-status-dot"></span>
               <span id="api-modal-status-text">Bağlantı durumu bilinmiyor</span>
@@ -117,6 +133,35 @@
               <button id="save-settings" class="btn btn-primary btn-sm"><i class="fas fa-save"></i> Kaydet</button>
             </div>
           </div>
+          <!-- Gemini AI Tab -->
+          <div class="modal-body modal-tab-content" id="settings-tab-gemini" data-settings-content="gemini">
+            <div class="modal-status" id="gemini-modal-status">
+              <span class="api-modal-status-dot" id="gemini-status-dot"></span>
+              <span id="gemini-status-text">Gemini durumu bilinmiyor</span>
+            </div>
+            <div class="field">
+              <label for="gemini-api-key"><i class="fas fa-key"></i> Gemini API Anahtarı</label>
+              <div class="input-row">
+                <input type="password" id="gemini-api-key" placeholder="AIzaSy..." spellcheck="false">
+                <button type="button" class="input-icon-btn" id="toggle-gemini-key" title="Göster/Gizle">
+                  <i class="fas fa-eye"></i>
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="gemini-budget"><i class="fas fa-lira-sign"></i> Aylık Bütçe (TL)</label>
+              <input type="number" step="0.01" id="gemini-budget" placeholder="200.00">
+            </div>
+            <div class="field">
+              <label for="gemini-usd-rate"><i class="fas fa-exchange-alt"></i> USD/TL Kuru</label>
+              <input type="number" step="0.01" id="gemini-usd-rate" placeholder="45.00">
+            </div>
+            <div class="gemini-info" id="gemini-info"></div>
+            <div class="modal-add-actions">
+              <button id="test-gemini" class="btn btn-outline btn-sm"><i class="fas fa-vial"></i> Test Et</button>
+              <button id="save-gemini" class="btn btn-primary btn-sm"><i class="fas fa-save"></i> Kaydet</button>
+            </div>
+          </div>
         </div>
 
         <!-- ═══════════════ PANEL SEKMESİ ═══════════════ -->
@@ -124,28 +169,28 @@
           <div class="dashboard" id="dashboard-view">
             <!-- İstatistikler -->
             <div class="dash-stats">
-              <div class="dash-stat-widget">
+              <div class="dash-stat-widget clickable" data-stat="total" title="Tüm sorguları göster">
                 <div class="dash-stat-icon"><i class="fas fa-check-circle"></i></div>
                 <div class="dash-stat-body">
                   <span class="dash-stat-value" id="stat-total-processed">0</span>
                   <span class="dash-stat-label">Toplam İşlenen</span>
                 </div>
               </div>
-              <div class="dash-stat-widget">
+              <div class="dash-stat-widget clickable" data-stat="today" title="Bugünkü sorguları göster">
                 <div class="dash-stat-icon blue"><i class="fas fa-calendar-day"></i></div>
                 <div class="dash-stat-body">
                   <span class="dash-stat-value" id="stat-today-processed">0</span>
                   <span class="dash-stat-label">Bugün</span>
                 </div>
               </div>
-              <div class="dash-stat-widget">
+              <div class="dash-stat-widget clickable" data-stat="errors" title="Hata detaylarını göster">
                 <div class="dash-stat-icon orange"><i class="fas fa-exclamation-triangle"></i></div>
                 <div class="dash-stat-body">
                   <span class="dash-stat-value" id="stat-total-errors">0</span>
                   <span class="dash-stat-label">Hata</span>
                 </div>
               </div>
-              <div class="dash-stat-widget">
+              <div class="dash-stat-widget clickable" data-stat="excel" title="Dışa aktarma bölümüne git">
                 <div class="dash-stat-icon purple"><i class="fas fa-file-excel"></i></div>
                 <div class="dash-stat-body">
                   <span class="dash-stat-value" id="stat-excel-rows">0</span>
@@ -405,7 +450,7 @@
         <section id="tab-whatsapp" class="tab-content">
           <div class="wa-layout">
             <!-- Bağlantı Durumu Kartı -->
-            <div class="wa-status-card">
+            <div class="wa-status-card" id="wa-status-card">
               <div class="wa-status-header">
                 <div class="wa-status-icon" id="wa-status-icon">
                   <i class="fab fa-whatsapp"></i>
@@ -420,27 +465,63 @@
                 <div class="wa-detail-row"><i class="fas fa-phone"></i><span>Numara</span><strong id="wa-phone">-</strong></div>
                 <div class="wa-detail-row"><i class="fas fa-clock"></i><span>Çalışma Süresi</span><strong id="wa-uptime">-</strong></div>
                 <div class="wa-detail-row"><i class="fas fa-check-double"></i><span>Son İşlem</span><strong id="wa-last-processed">-</strong></div>
-                <div class="wa-detail-row"><i class="fas fa-user-shield"></i><span>İzinli JID</span><strong id="wa-allowed-jids">-</strong></div>
               </div>
             </div>
 
-            <!-- QR Kod Bölümü -->
-            <div class="wa-qr-card" id="wa-qr-card">
-              <div class="wa-qr-header">
+            <!-- İzinli Numaralar (JID) Yönetim Kartı — Accordion -->
+            <div class="wa-settings-card disabled" id="wa-jid-card">
+              <div class="wa-settings-card-header" id="wa-jid-toggle">
+                <div class="wa-settings-card-title">
+                  <i class="fas fa-user-shield"></i>
+                  <div>
+                    <h4>İzinli Numaralar</h4>
+                    <span class="wa-jid-subtitle" id="wa-jid-subtitle">WhatsApp bağlantısı gerekli</span>
+                  </div>
+                </div>
+                <div class="wa-settings-card-right">
+                  <i class="fas fa-lock wa-jid-lock-icon" id="wa-jid-lock-icon" title="WhatsApp bağlantısı gerekli"></i>
+                  <i class="fas fa-chevron-down wa-jid-chevron" id="wa-jid-chevron"></i>
+                </div>
+              </div>
+              <div class="wa-settings-card-collapse" id="wa-jid-collapse">
+                <div class="wa-settings-card-body">
+                  <div class="wa-jid-list" id="wa-jid-list">
+                    <div class="wa-jid-empty"><i class="fas fa-globe"></i> Tüm numaralar (filtresiz)</div>
+                  </div>
+                  <div class="wa-jid-add-row">
+                    <input type="text" id="wa-jid-input" placeholder="905xxxxxxxxx" spellcheck="false">
+                    <button class="btn btn-primary btn-sm" id="wa-jid-add-btn" title="Numara Ekle">
+                      <i class="fas fa-plus"></i> Ekle
+                    </button>
+                  </div>
+                  <div class="wa-jid-hint">
+                    <i class="fas fa-info-circle"></i>
+                    Boş bırakılırsa tüm numaralardan mesaj kabul edilir
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- QR Kod / Bağlı Durumu Bölümü — Accordion -->
+            <div class="wa-qr-card open" id="wa-qr-card">
+              <div class="wa-qr-header" id="wa-qr-toggle">
                 <i class="fas fa-qrcode"></i>
                 <span>QR Kod ile Giriş</span>
+                <i class="fas fa-chevron-down wa-qr-chevron" id="wa-qr-chevron"></i>
               </div>
-              <div class="wa-qr-body" id="wa-qr-body">
-                <div class="wa-qr-placeholder" id="wa-qr-placeholder">
-                  <i class="fas fa-qrcode"></i>
-                  <p>QR kod yükleniyor...</p>
-                  <span>WhatsApp'ınızdan QR kodu tarayın</span>
+              <div class="wa-qr-collapse" id="wa-qr-collapse">
+                <div class="wa-qr-body" id="wa-qr-body">
+                  <div class="wa-qr-placeholder" id="wa-qr-placeholder">
+                    <i class="fas fa-qrcode"></i>
+                    <p>QR kod yükleniyor...</p>
+                    <span>WhatsApp'ınızdan QR kodu tarayın</span>
+                  </div>
+                  <img id="wa-qr-image" class="wa-qr-image hidden" alt="WhatsApp QR Kod" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
                 </div>
-                <img id="wa-qr-image" class="wa-qr-image hidden" alt="WhatsApp QR Kod" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==">
-              </div>
-              <div class="wa-qr-hint">
-                <i class="fas fa-info-circle"></i>
-                WhatsApp > Bağlı Cihazlar > Cihaz Bağla ile tarayın
+                <div class="wa-qr-hint">
+                  <i class="fas fa-info-circle"></i>
+                  WhatsApp > Bağlı Cihazlar > Cihaz Bağla ile tarayın
+                </div>
               </div>
             </div>
 
@@ -469,6 +550,35 @@
       <div class="detail-modal-body" id="detail-modal-body">
         <!-- JS ile doldurulacak -->
       </div>
+    </div>
+
+    <!-- ═══ HATA DETAY POPUP ═══ -->
+    <div class="detail-backdrop hidden" id="error-detail-backdrop"></div>
+    <div class="detail-modal hidden" id="error-detail-modal">
+      <div class="detail-modal-header">
+        <h3><i class="fas fa-exclamation-triangle"></i> Hata Detayları</h3>
+        <button class="modal-close" id="error-detail-modal-close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="detail-modal-body" id="error-detail-modal-body">
+        <div class="error-list-loading"><i class="fas fa-spinner fa-spin"></i> Yükleniyor...</div>
+      </div>
+    </div>
+
+    <!-- ═══ TERMINAL LOG POPUP ═══ -->
+    <div class="terminal-popup hidden" id="terminal-popup">
+      <div class="terminal-popup-header">
+        <h3><i class="fas fa-terminal"></i> Terminal Log</h3>
+        <div class="terminal-popup-actions">
+          <button class="icon-btn-sm" id="terminal-clear-btn" title="Temizle"><i class="fas fa-trash-alt"></i></button>
+          <button class="icon-btn-sm" id="terminal-scroll-btn" title="Aşağı Kaydır"><i class="fas fa-arrow-down"></i></button>
+          <button class="modal-close" id="terminal-close-btn"><i class="fas fa-times"></i></button>
+        </div>
+      </div>
+      <div class="terminal-popup-status" id="terminal-status">
+        <span class="terminal-status-dot"></span>
+        <span>Bağlanıyor...</span>
+      </div>
+      <div class="terminal-popup-body" id="terminal-output"></div>
     </div>
 
     <!-- Onay Diyaloğu -->

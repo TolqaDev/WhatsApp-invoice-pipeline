@@ -77,9 +77,7 @@ async function processQueue() {
   startKeepAlive();
 
   try {
-    const { apiUrl } = await chromeGet(['apiUrl']);
-    const sessionStore = chrome.storage.session || chrome.storage.local;
-    const { apiKey } = await new Promise(resolve => sessionStore.get(['apiKey'], resolve));
+    const { apiUrl, apiKey } = await chromeGet(['apiUrl', 'apiKey']);
     const baseUrl = normalizeUrl(apiUrl || 'http://localhost:3000');
 
     while (true) {
@@ -100,22 +98,18 @@ async function processQueue() {
       // Sonraki bekleyen öğeyi bul
       const idx = queue_meta.results.findIndex(r => r.status === 'pending');
       if (idx === -1) {
-        // Tümü tamamlandı
         queue_meta.status = 'completed';
         await chromeSet({ queue_meta });
-        // Büyük base64 verisini temizle
         await chromeRemove(['queue_items']);
         broadcast({ type: 'QUEUE_COMPLETED', meta: queue_meta });
         break;
       }
 
-      // İşleniyor olarak güncelle
       queue_meta.currentIndex = idx;
       queue_meta.results[idx].status = 'processing';
       await chromeSet({ queue_meta });
       broadcast({ type: 'QUEUE_PROGRESS', index: idx, total: queue_meta.totalCount, status: 'processing' });
 
-      // API'ye gönder
       const item = queue_items[idx];
       try {
         const result = await fetchProcessImage(baseUrl, apiKey, item.base64, item.mimeType);
@@ -143,7 +137,6 @@ async function processQueue() {
     }
   } catch (e) {
     console.error('[Fatura Bot] Kuyruk işleme hatası:', e);
-    // Meta'yı hata durumuna al
     try {
       const { queue_meta } = await chromeGet(['queue_meta']);
       if (queue_meta && queue_meta.status === 'processing') {

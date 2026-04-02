@@ -2,7 +2,8 @@
 
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Callable
 
 
 class ColorFormatter(logging.Formatter):
@@ -23,6 +24,29 @@ class ColorFormatter(logging.Formatter):
         if hasattr(record, "extra_data") and isinstance(record.extra_data, dict):
             extra_str = " | " + " ".join(f"{k}={v}" for k, v in record.extra_data.items())
         return f"{color}[{timestamp}] {record.levelname:<8}{self.RESET} {msg}{extra_str}"
+
+
+class LogEventBus:
+    """Basit event bus — log event'lerini SSE stream'e yönlendirir."""
+
+    def __init__(self):
+        self._listeners: list[Callable] = []
+
+    def on(self, callback: Callable):
+        self._listeners.append(callback)
+
+    def off(self, callback: Callable):
+        self._listeners = [cb for cb in self._listeners if cb is not callback]
+
+    def emit(self, data: dict):
+        for cb in self._listeners:
+            try:
+                cb(data)
+            except Exception:
+                pass
+
+
+log_event_bus = LogEventBus()
 
 
 class StructuredLogger:
@@ -47,6 +71,17 @@ class StructuredLogger:
         extra = {"extra_data": kwargs} if kwargs else {}
         self._logger.log(level, message, extra=extra)
 
+        level_name = logging.getLevelName(level).lower()
+        category = kwargs.get("event", "system")
+        bus_data = {k: v for k, v in kwargs.items() if k != "event"} if kwargs else None
+        log_event_bus.emit({
+            "level": level_name,
+            "category": category,
+            "message": message,
+            "data": bus_data or None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
     def debug(self, message: str, **kwargs):
         self._log(logging.DEBUG, message, **kwargs)
 
@@ -65,6 +100,16 @@ class StructuredLogger:
     def exception(self, message: str, **kwargs):
         extra = {"extra_data": kwargs} if kwargs else {}
         self._logger.exception(message, extra=extra)
+
+        category = kwargs.get("event", "system")
+        bus_data = {k: v for k, v in kwargs.items() if k != "event"} if kwargs else None
+        log_event_bus.emit({
+            "level": "error",
+            "category": category,
+            "message": message,
+            "data": bus_data or None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
 
 logger = StructuredLogger()

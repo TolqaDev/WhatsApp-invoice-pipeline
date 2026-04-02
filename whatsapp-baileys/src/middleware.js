@@ -41,7 +41,7 @@ setInterval(() => {
 export function cors(req, res, next) {
   const allowedOrigin = config.pythonApiUrl || 'http://127.0.0.1:3000';
   res.header('Access-Control-Allow-Origin', allowedOrigin);
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, X-API-Key');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();

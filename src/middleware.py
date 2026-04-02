@@ -75,6 +75,8 @@ async def security_middleware(request: Request, call_next):
 
     if API_SECRET and path not in ("/v1/health",):
         api_key = request.headers.get("x-api-key", "")
+        if not api_key and path.startswith("/v1/terminal/"):
+            api_key = request.query_params.get("api_key", "")
         if not api_key or not secrets.compare_digest(api_key, API_SECRET):
             logger.warning("Auth başarısız", event="auth_failed", ip=client_ip, path=path)
             return JSONResponse(status_code=401, content={

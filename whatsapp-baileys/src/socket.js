@@ -74,6 +74,11 @@ export function setLastProcessed() {
   lastProcessedAt = Date.now();
 }
 
+export function updateAllowedJids(jids) {
+  config.allowedJids = jids;
+  console.log(`[WA] İzinli JID listesi güncellendi: ${jids.length > 0 ? jids.join(', ') : 'HEPSİ'}`);
+}
+
 function startMuteLoop() {
   stopMuteLoop();
   muteInterval = setInterval(async () => {

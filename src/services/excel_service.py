@@ -3,6 +3,7 @@
 import asyncio
 import csv
 import io
+import re
 import shutil
 from datetime import datetime, timezone, date
 from pathlib import Path
@@ -85,12 +86,10 @@ class ExcelService:
                 wb = load_workbook(str(file_path))
                 if self.SHEET_NAME in wb.sheetnames:
                     return wb
-                # Eski formatta dosya — yeni şablon oluştur
                 wb.close()
             except Exception as e:
                 logger.warning("Mevcut dosya okunamadı, yeniden oluşturulacak", error=str(e))
 
-        # Şablon dosyasından kopyala
         if self._template_path.exists():
             try:
                 shutil.copy2(str(self._template_path), str(file_path))
@@ -118,16 +117,7 @@ class ExcelService:
             ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     def _build_rows(self, data: ReceiptData) -> list[list]:
-        """Bir fişten şablon formatında satır(lar) üretir.
-
-        Çift kayıt (double-entry) muhasebe prensibi:
-          • Gider hesabına BORÇ  (matrah)
-          • KDV hesabına   BORÇ  (her oran için ayrı — varsa)
-          • Ödeme hesabına ALACAK (toplam)
-        Toplam borç == toplam alacak → muhasebe denkliği sağlanır.
-
-        Dönüşüm mantığı luca_transformer modülüne delege edilmiştir.
-        """
+        """Bir fişten şablon formatında çift-kayıt muhasebe satırları üretir."""
         return fis_to_luca_list(data)
 
     async def add_row(self, data: ReceiptData, confidence: int, sender: str, source: str = "gemini") -> int:
@@ -167,7 +157,11 @@ class ExcelService:
                 raise
 
     async def update_row(self, row_number: int, data: dict, target_date: Optional[date] = None) -> bool:
-        """Belirtilen satır grubunu güncelle (aynı Fiş No'ya sahip satırlar)."""
+        """Belirtilen satır grubunu güncelle (aynı Fiş No'ya sahip satırlar).
+
+        Desteklenen alanlar: fis_no, tarih, firma, masraf, toplam, odeme, kdv_oran, kdv_tutar, matrah.
+        KDV/matrah/toplam değiştiğinde ilgili muhasebe satırları tam olarak yeniden hesaplanır.
+        """
         async with self._lock:
             try:
                 file_path = self._daily_path(target_date)
@@ -184,7 +178,6 @@ class ExcelService:
                     wb.close()
                     return False
 
-                # Fiş No'dan grup satırlarını bul
                 fis_no = ws.cell(row=row_number, column=1).value
                 group_rows = [row_number]
                 if fis_no:
@@ -194,6 +187,7 @@ class ExcelService:
                         else:
                             break
 
+                # ── Tüm satırlarda ortak güncelleme: fis_no, tarih, firma ──
                 for r in group_rows:
                     if "fis_no" in data and data["fis_no"] is not None:
                         ws.cell(row=r, column=1, value=data["fis_no"])
@@ -207,27 +201,142 @@ class ExcelService:
                     if "firma" in data and data["firma"] is not None:
                         ws.cell(row=r, column=3, value=data["firma"])
 
+                # ── Satır türlerini tanımla ──
+                masraf_rows = []  # 770.xx hesap kodlu satırlar (gider)
+                kdv_rows = []     # 191.xx hesap kodlu satırlar
+                kkeg_borc_rows = []   # 900 hesap kodlu satırlar
+                kkeg_alacak_rows = [] # 901 hesap kodlu satırlar
+                odeme_rows = []   # 100.xx/102.xx hesap kodlu satırlar (son satır)
+
+                for r in group_rows:
+                    hesap = str(ws.cell(row=r, column=4).value or "")
+                    if hesap.startswith("770"):
+                        masraf_rows.append(r)
+                    elif hesap.startswith("191"):
+                        kdv_rows.append(r)
+                    elif hesap == "900":
+                        kkeg_borc_rows.append(r)
+                    elif hesap == "901":
+                        kkeg_alacak_rows.append(r)
+                    elif hesap.startswith("100") or hesap.startswith("102"):
+                        odeme_rows.append(r)
+
+                has_kkeg = len(kkeg_borc_rows) > 0
+                firma_val = data.get("firma") or ws.cell(row=group_rows[0], column=3).value or ""
+
+                # ── Masraf türü güncellemesi ──
                 if "masraf" in data and data["masraf"] is not None:
                     masraf_kodu = MASRAF_HESAP_KODU.get(data["masraf"], "770.99")
-                    ws.cell(row=group_rows[0], column=4, value=masraf_kodu)
-                    firma_val = ws.cell(row=group_rows[0], column=3).value or ""
-                    ws.cell(row=group_rows[0], column=7, value=f"{data['masraf']} - {firma_val}")
+                    for r in masraf_rows:
+                        ws.cell(row=r, column=4, value=masraf_kodu)
+                        ws.cell(row=r, column=7, value=f"{data['masraf']} Gideri - {firma_val}")
 
-                if "toplam" in data and data["toplam"] is not None:
-                    toplam = float(data["toplam"])
-                    last_row = group_rows[-1]
-                    ws.cell(row=last_row, column=9, value=round(toplam, 2))
-                    if len(group_rows) == 2:
-                        ws.cell(row=group_rows[0], column=8, value=round(toplam, 2))
-
+                # ── Ödeme türü güncellemesi ──
                 if "odeme" in data and data["odeme"] is not None:
                     odeme_key = data["odeme"].upper()
                     odeme_kodu = ODEME_HESAP_KODU.get(odeme_key, "100.01")
-                    last_row = group_rows[-1]
-                    ws.cell(row=last_row, column=4, value=odeme_kodu)
                     belge_tr = ODEME_BELGE_TR.get(odeme_key, "Fiş")
+                    for r in odeme_rows:
+                        ws.cell(row=r, column=4, value=odeme_kodu)
                     for r in group_rows:
                         ws.cell(row=r, column=11, value=belge_tr)
+
+                # ── KDV/Matrah/Toplam güncellemesi ──
+                needs_recalc = any(
+                    k in data and data[k] is not None
+                    for k in ("toplam", "matrah", "kdv_tutar", "kdv_oran")
+                )
+
+                if needs_recalc:
+                    toplam = float(data["toplam"]) if ("toplam" in data and data["toplam"] is not None) else None
+                    matrah = float(data["matrah"]) if ("matrah" in data and data["matrah"] is not None) else None
+                    kdv_tutar = float(data["kdv_tutar"]) if ("kdv_tutar" in data and data["kdv_tutar"] is not None) else None
+                    kdv_oran = data.get("kdv_oran")
+
+                    if toplam is None:
+                        if has_kkeg and odeme_rows and kkeg_alacak_rows:
+                            # KKEG durumunda: ödeme Alacak = matrah + kdv_70
+                            # Gerçek toplam = ödeme Alacak + KKEG Alacak toplamı
+                            odeme_val = float(ws.cell(row=odeme_rows[-1], column=9).value or 0)
+                            kkeg_alacak_val = sum(float(ws.cell(row=r, column=9).value or 0) for r in kkeg_alacak_rows)
+                            toplam = odeme_val + kkeg_alacak_val
+                        elif odeme_rows:
+                            toplam = float(ws.cell(row=odeme_rows[-1], column=9).value or 0)
+                    if matrah is None:
+                        if has_kkeg and masraf_rows and kkeg_borc_rows:
+                            # KKEG durumunda: masraf satırı Borç = matrah - kdv_30
+                            # Gerçek matrah = masraf Borç + KKEG Borç toplamı
+                            gider_val = float(ws.cell(row=masraf_rows[0], column=8).value or 0)
+                            kkeg_val = sum(float(ws.cell(row=r, column=8).value or 0) for r in kkeg_borc_rows)
+                            matrah = gider_val + kkeg_val
+                        elif masraf_rows:
+                            matrah = float(ws.cell(row=masraf_rows[0], column=8).value or 0)
+                    if kdv_tutar is None and kdv_rows:
+                        kdv_tutar = sum(float(ws.cell(row=r, column=8).value or 0) for r in kdv_rows)
+
+                    if toplam is not None and matrah is None and kdv_tutar is None:
+                        if kdv_oran is None and kdv_rows:
+                            detay = str(ws.cell(row=kdv_rows[0], column=7).value or "")
+                            m = re.search(r'%(\d+)', detay)
+                            if m:
+                                kdv_oran = f"%{m.group(1)}"
+
+                        if kdv_oran:
+                            m = re.search(r'(\d+)', str(kdv_oran))
+                            if m:
+                                oran_decimal = int(m.group(1)) / 100.0
+                                matrah = round(toplam / (1 + oran_decimal), 2)
+                                kdv_tutar = round(toplam - matrah, 2)
+
+                    if kdv_oran and kdv_rows:
+                        oran_key = kdv_oran if kdv_oran.startswith('%') else f"%{kdv_oran}"
+                        m = re.search(r'(\d+)', str(oran_key))
+                        if m:
+                            oran_key = f"%{m.group(1)}"
+                        kdv_kodu = KDV_HESAP_KODU.get(oran_key, f"191.{oran_key.replace('%', '').zfill(2)}")
+                        for r in kdv_rows:
+                            ws.cell(row=r, column=4, value=kdv_kodu)
+                            old_detay = str(ws.cell(row=r, column=7).value or "")
+                            new_detay = re.sub(r'%\d+', oran_key, old_detay) if '%' in old_detay else f"KDV {oran_key} - {firma_val}"
+                            ws.cell(row=r, column=7, value=new_detay)
+
+                    # ── KKEG (70/30) durumunda yeniden hesapla ──
+                    if has_kkeg and matrah is not None and kdv_tutar is not None:
+                        kdv_70 = round(kdv_tutar * 0.70, 2)
+                        kdv_30 = round(kdv_tutar - kdv_70, 2)
+                        gider_tutar = round(matrah - kdv_30, 2)
+                        odeme_tutar = round(matrah + kdv_70, 2)
+
+                        # Masraf satırı (gider)
+                        for r in masraf_rows:
+                            ws.cell(row=r, column=8, value=gider_tutar)
+                        # KDV satırları (%70)
+                        for r in kdv_rows:
+                            ws.cell(row=r, column=8, value=kdv_70)
+                        # KKEG Borç (900)
+                        for r in kkeg_borc_rows:
+                            ws.cell(row=r, column=8, value=kdv_30)
+                        # KKEG Alacak (901)
+                        for r in kkeg_alacak_rows:
+                            ws.cell(row=r, column=9, value=kdv_30)
+                        # Ödeme satırı
+                        for r in odeme_rows:
+                            ws.cell(row=r, column=9, value=odeme_tutar)
+
+                    # ── Normal fiş durumunda yeniden hesapla ──
+                    elif not has_kkeg:
+                        if matrah is not None and masraf_rows:
+                            for r in masraf_rows:
+                                ws.cell(row=r, column=8, value=round(matrah, 2))
+
+                        if kdv_tutar is not None and kdv_rows:
+                            # Tek KDV satırı varsa tamamını yaz
+                            if len(kdv_rows) == 1:
+                                ws.cell(row=kdv_rows[0], column=8, value=round(kdv_tutar, 2))
+
+                        if toplam is not None and odeme_rows:
+                            for r in odeme_rows:
+                                ws.cell(row=r, column=9, value=round(toplam, 2))
 
                 wb.save(str(file_path))
                 wb.close()
@@ -260,6 +369,53 @@ class ExcelService:
                 return count
             except Exception:
                 return 0
+
+    async def delete_row(self, row_number: int, target_date: Optional[date] = None) -> dict:
+        """Belirtilen satır grubunu (aynı Fiş No) Excel'den siler."""
+        async with self._lock:
+            try:
+                file_path = self._daily_path(target_date)
+                if not file_path.exists():
+                    return {"deleted": 0, "error": "Dosya bulunamadı"}
+
+                wb = load_workbook(str(file_path))
+                if self.SHEET_NAME not in wb.sheetnames:
+                    wb.close()
+                    return {"deleted": 0, "error": "Sayfa bulunamadı"}
+                ws = wb[self.SHEET_NAME]
+
+                if row_number < 2 or row_number > ws.max_row:
+                    wb.close()
+                    return {"deleted": 0, "error": "Geçersiz satır numarası"}
+
+                fis_no = ws.cell(row=row_number, column=1).value
+                group_rows = [row_number]
+                if fis_no:
+                    for r in range(row_number + 1, ws.max_row + 1):
+                        if ws.cell(row=r, column=1).value == fis_no:
+                            group_rows.append(r)
+                        else:
+                            break
+
+                deleted_count = len(group_rows)
+                for r in sorted(group_rows, reverse=True):
+                    ws.delete_rows(r, 1)
+
+                wb.save(str(file_path))
+                wb.close()
+
+                logger.info(
+                    "Excel satır grubu silindi",
+                    event="excel_row_deleted",
+                    file=file_path.name,
+                    row_number=row_number,
+                    group_size=deleted_count,
+                )
+                return {"deleted": deleted_count, "first_row": row_number}
+
+            except Exception as e:
+                logger.error("Excel silme hatası", event="excel_delete_error", error=str(e))
+                raise
 
     async def get_file_path(self, target_date: Optional[date] = None) -> Optional[str]:
         path = self._daily_path(target_date)

@@ -18,9 +18,10 @@ _HEADERS = {"X-API-Key": API_SECRET} if API_SECRET else {}
 # ─── Gemini Config ───────────────────────────────────
 
 class GeminiConfigRequest(BaseModel):
-    api_key: str = Field(..., min_length=10, description="Gemini API anahtarı")
+    api_key: Optional[str] = Field(None, min_length=10, description="Gemini API anahtarı (opsiyonel — zaten aktifse gerekmez)")
     monthly_budget_tl: Optional[float] = Field(None, ge=0, description="Aylık TL bütçe limiti")
     usd_tl_rate: Optional[float] = Field(None, ge=0, description="USD/TL kuru")
+    model: Optional[str] = Field(None, description="Gemini model adı")
 
 
 class GeminiConfigResponse(BaseModel):
@@ -51,6 +52,7 @@ async def get_gemini_config():
         "active": is_active,
         "model": gemini_service.model_name if is_active else None,
         "has_api_key": is_active,
+        "available_models": gemini_service.AVAILABLE_MODELS,
         **budget_info,
     }
 
@@ -62,11 +64,23 @@ async def update_gemini_config(req: GeminiConfigRequest):
         budget_tl = req.monthly_budget_tl or 200.0
         usd_rate = req.usd_tl_rate or 45.0
 
-        gemini_service.initialize(
-            api_key=req.api_key,
-            monthly_budget_tl=budget_tl,
-            usd_tl_rate=usd_rate,
-        )
+        if req.api_key:
+            # Yeni API key ile tam initialize
+            gemini_service.initialize(
+                api_key=req.api_key,
+                monthly_budget_tl=budget_tl,
+                usd_tl_rate=usd_rate,
+                model=req.model,
+            )
+        elif gemini_service.is_active:
+            # API key gönderilmedi ama Gemini zaten aktif — sadece ayarları güncelle
+            if req.model:
+                gemini_service.set_model(req.model)
+            if gemini_service.budget:
+                gemini_service.budget.budget_tl = budget_tl
+                gemini_service.budget.usd_tl_rate = usd_rate
+        else:
+            raise ValueError("Gemini aktif değil, API anahtarı gerekli")
 
         logger.info("Gemini ayarları güncellendi", event="gemini_config_updated",
                      monthly_budget_tl=budget_tl, usd_tl_rate=usd_rate)

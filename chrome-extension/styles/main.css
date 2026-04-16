@@ -559,8 +559,8 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .wa-connected-msg .wa-connected-sub{font-size:10px;color:var(--text-muted)}
 
 /* Gemini Info (settings modal) */
-.gemini-info{display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:var(--bg-input);border-radius:var(--radius-xs);font-size:11px}
-.gemini-info:empty{display:none}
+.gemini-info{display:flex;flex-direction:column;gap:4px;padding:8px 10px;background:var(--bg-input);border-radius:var(--radius-xs);font-size:11px;margin-top:4px}
+.gemini-info:empty{display:none;margin-top:0}
 .gemini-info-row{display:flex;align-items:center;gap:8px;padding:2px 0}
 .gemini-info-row i{color:var(--primary);width:14px;text-align:center;font-size:10px;flex-shrink:0}
 .gemini-info-row span{flex:1;color:var(--text-secondary);font-size:10px}
@@ -712,6 +712,16 @@ body{font-family:'Segoe UI',-apple-system,BlinkMacSystemFont,sans-serif;backgrou
 .error-list-sender{display:inline-flex;align-items:center;gap:4px;font-size:9px;color:var(--text-muted);margin-top:4px}
 .error-list-sender i{font-size:8px}
 
+/* ═══ DISCONNECTION OVERLAY ═══ */
+.disconnection-overlay{background:rgba(234,67,53,0.12);border:1px solid var(--danger);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:12px;animation:pulseOverlay 2s ease-in-out infinite}
+.disconnection-overlay.hidden{display:none}
+.disconnection-overlay-content{display:flex;align-items:center;gap:10px;color:var(--danger);font-weight:600;font-size:12px}
+.disconnection-overlay-content i.fa-unlink{font-size:16px;animation:shake 1s ease-in-out infinite}
+.disconnection-overlay-content span{flex:1}
+@keyframes pulseOverlay{0%,100%{opacity:1}50%{opacity:0.7}}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-2px)}75%{transform:translateX(2px)}}
 
-
-
+/* ═══ GEMINI MODEL SELECT ═══ */
+.gemini-model-select{width:100%;padding:8px 10px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-xs);font-size:11px;cursor:pointer;transition:border-color var(--transition)}
+.gemini-model-select:focus{border-color:var(--primary);outline:none}
+.gemini-model-select option{background:var(--bg-surface);color:var(--text-primary);padding:4px}

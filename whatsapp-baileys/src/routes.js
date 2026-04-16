@@ -79,15 +79,23 @@ router.post('/send-notification', async (req, res) => {
     return res.status(503).json({ success: false, message: 'WhatsApp bağlı değil' });
   }
 
-  const { message, error_type } = req.body || {};
+  const { message, error_type, target_jid } = req.body || {};
   if (!message) {
     return res.status(400).json({ success: false, message: 'Mesaj içeriği gerekli' });
   }
 
-  const targets = config.allowedJids.length > 0 ? config.allowedJids : [];
+  // target_jid varsa sadece o kullanıcıya gönder, yoksa tüm yetkili numaralara
+  let targets;
+  if (target_jid) {
+    const normalizedTarget = target_jid.includes('@') ? target_jid : `${target_jid}@s.whatsapp.net`;
+    targets = [normalizedTarget];
+  } else {
+    targets = config.allowedJids.length > 0 ? config.allowedJids : [];
+  }
+
   if (targets.length === 0) {
-    console.warn('[Routes] Bildirim hedefi yok — ALLOW_JID tanımlı değil');
-    return res.json({ success: false, message: 'Bildirim hedefi bulunamadı (ALLOW_JID boş)' });
+    console.warn('[Routes] Bildirim hedefi yok — ALLOW_JID tanımlı değil ve target_jid belirtilmemiş');
+    return res.json({ success: false, message: 'Bildirim hedefi bulunamadı' });
   }
 
   let sent = 0;

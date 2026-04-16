@@ -305,10 +305,12 @@ class FaturaAPI {
     return this.request('/settings/gemini');
   }
 
-  async updateGeminiConfig(apiKey, monthlyBudgetTl = null, usdTlRate = null) {
-    const payload = { api_key: apiKey };
+  async updateGeminiConfig(apiKey, monthlyBudgetTl = null, usdTlRate = null, model = null) {
+    const payload = {};
+    if (apiKey) payload.api_key = apiKey;
     if (monthlyBudgetTl !== null) payload.monthly_budget_tl = monthlyBudgetTl;
     if (usdTlRate !== null) payload.usd_tl_rate = usdTlRate;
+    if (model !== null) payload.model = model;
     return this.request('/settings/gemini', {
       method: 'PUT',
       body: JSON.stringify(payload),

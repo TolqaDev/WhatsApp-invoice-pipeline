@@ -69,10 +69,14 @@ class NotificationService:
                 count += 1
         return count
 
-    async def notify_gemini_failure(self, error_type: str, detail: str = ""):
-        """Gemini hatası bildirimini oluştur ve WhatsApp'a gönder (cooldown kontrolü ile)."""
+    async def notify_gemini_failure(self, error_type: str, detail: str = "", sender_jid: str = None):
+        """Gemini hatası bildirimini oluştur ve WhatsApp'a gönder (cooldown kontrolü ile).
+
+        sender_jid verilirse sadece o kullanıcıya mesaj gönderilir, tüm yetkili numaralara değil.
+        """
         now = time.time()
-        last = self._last_sent.get(error_type, 0)
+        cooldown_key = f"{error_type}:{sender_jid or 'all'}"
+        last = self._last_sent.get(cooldown_key, 0)
 
         if now - last < self.COOLDOWN_SECONDS:
             logger.debug(
@@ -83,7 +87,7 @@ class NotificationService:
             )
             return
 
-        self._last_sent[error_type] = now
+        self._last_sent[cooldown_key] = now
         self._counter += 1
 
         notification = GeminiNotification(
@@ -99,12 +103,13 @@ class NotificationService:
             event="gemini_notification",
             error_type=error_type,
             detail=detail,
+            sender_jid=sender_jid,
         )
 
-        asyncio.create_task(self._send_wa_notification(error_type))
+        asyncio.create_task(self._send_wa_notification(error_type, sender_jid=sender_jid))
 
-    async def _send_wa_notification(self, error_type: str):
-        """WhatsApp Bridge'e bildirim mesajı gönder."""
+    async def _send_wa_notification(self, error_type: str, sender_jid: str = None):
+        """WhatsApp Bridge'e bildirim mesajı gönder. sender_jid varsa sadece ona gönderilir."""
         try:
             from src.config import API_SECRET, WHATSAPP_BRIDGE_URL
 
@@ -114,10 +119,14 @@ class NotificationService:
             if API_SECRET:
                 headers["X-API-Key"] = API_SECRET
 
+            payload = {"message": wa_message, "error_type": error_type}
+            if sender_jid:
+                payload["target_jid"] = sender_jid
+
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
                     f"{WHATSAPP_BRIDGE_URL}/send-notification",
-                    json={"message": wa_message, "error_type": error_type},
+                    json=payload,
                     headers=headers,
                 )
                 if resp.status_code == 200:

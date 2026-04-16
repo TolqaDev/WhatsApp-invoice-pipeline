@@ -149,16 +149,35 @@ class MonthlyBudgetTracker:
 class GeminiService:
     """Gemini Vision API ile fiş analiz servisi."""
 
+    AVAILABLE_MODELS = {
+        "gemini-2.5-flash": {"label": "Gemini 2.5 Flash", "input": 0.15, "output": 0.60, "thinking": 3.50, "tier": "Ekonomik"},
+        "gemini-2.5-flash-lite-preview-06-17": {"label": "Gemini 2.5 Flash‑Lite", "input": 0.075, "output": 0.30, "thinking": 0.0, "tier": "En Ucuz"},
+        "gemini-2.5-pro": {"label": "Gemini 2.5 Pro", "input": 1.25, "output": 10.00, "thinking": 3.50, "tier": "Gelişmiş"},
+        "gemini-2.0-flash": {"label": "Gemini 2.0 Flash", "input": 0.10, "output": 0.40, "thinking": 0.0, "tier": "Ekonomik"},
+        "gemini-2.0-flash-lite": {"label": "Gemini 2.0 Flash‑Lite", "input": 0.075, "output": 0.30, "thinking": 0.0, "tier": "En Ucuz"},
+    }
+    DEFAULT_MODEL = "gemini-2.5-flash"
+
     def __init__(self):
         self._client: Optional[genai.Client] = None
-        self._model_name = "gemini-2.5-flash"
+        self._model_name = self.DEFAULT_MODEL
         self.budget: Optional[MonthlyBudgetTracker] = None
 
-    def initialize(self, api_key: str, monthly_budget_tl: float = 200.0, usd_tl_rate: float = 38.0):
+    def initialize(self, api_key: str, monthly_budget_tl: float = 200.0, usd_tl_rate: float = 38.0, model: str = None):
         self._client = genai.Client(api_key=api_key)
+        if model and model in self.AVAILABLE_MODELS:
+            self._model_name = model
         self.budget = MonthlyBudgetTracker(monthly_budget_tl=monthly_budget_tl, usd_tl_rate=usd_tl_rate)
         logger.info("Gemini servisi başlatıldı", event="gemini_initialized",
                      model=self._model_name, monthly_budget_tl=monthly_budget_tl)
+
+    def set_model(self, model: str):
+        """Modeli runtime'da değiştir."""
+        if model in self.AVAILABLE_MODELS:
+            self._model_name = model
+            logger.info("Gemini modeli değiştirildi", event="gemini_model_changed", model=model)
+            return True
+        return False
 
     @property
     def is_active(self) -> bool:

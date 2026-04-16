@@ -30,10 +30,12 @@ class FaturaBotApp {
         this.updateConnectionUI(true);
         this.loadDashboardData();
         this.startNotificationPolling();
+        this.startConnectionWatchdog();
       } catch (e) {
         console.error('İlk bağlantı başarısız:', e);
         this.state.apiReady = false;
         this.updateConnectionUI(false);
+        this.showDisconnectionOverlay(true);
         setTimeout(() => this.openApiModal(), 600);
       }
 
@@ -403,6 +405,8 @@ class FaturaBotApp {
 
       const waMsg = waOk ? ' · WP köprüsü ✓' : (waUrl ? ' · WP köprüsü ✗' : '');
       utils.toast(`Python API bağlı! v${data.version}${waMsg}`, 'success');
+      this.showDisconnectionOverlay(false);
+      this.startConnectionWatchdog();
       this.closeApiModal();
       this.loadDashboardData();
       this.startNotificationPolling();
@@ -429,6 +433,8 @@ class FaturaBotApp {
       const closeBtn = document.getElementById('api-modal-close');
       if (closeBtn) closeBtn.style.display = '';
       utils.toast('Ayarlar kaydedildi ve bağlantı kuruldu!', 'success');
+      this.showDisconnectionOverlay(false);
+      this.startConnectionWatchdog();
       this.closeApiModal();
       this.loadDashboardData();
       this.startNotificationPolling();
@@ -458,8 +464,20 @@ class FaturaBotApp {
     const dot = document.getElementById('gemini-status-dot');
     const text = document.getElementById('gemini-status-text');
     const info = document.getElementById('gemini-info');
+    const modelSelect = document.getElementById('gemini-model');
     try {
       const data = await api.getGeminiConfig();
+
+      // Model dropdown'ını doldur
+      if (data.available_models && modelSelect) {
+        const currentModel = data.model || 'gemini-2.5-flash';
+        modelSelect.innerHTML = Object.entries(data.available_models).map(([id, m]) => {
+          const priceLabel = `Giriş: $${m.input}/M · Çıkış: $${m.output}/M`;
+          const selected = id === currentModel ? 'selected' : '';
+          return `<option value="${id}" ${selected}>${utils.escapeHtml(m.label)} — ${m.tier} (${priceLabel})</option>`;
+        }).join('');
+      }
+
       if (data.active) {
         dot.className = 'api-modal-status-dot connected';
         text.textContent = `Gemini aktif — ${data.model || 'bilinmeyen model'}`;
@@ -501,15 +519,19 @@ class FaturaBotApp {
 
   async testGeminiConfig() {
     const apiKey = document.getElementById('gemini-api-key').value.trim();
-    if (!apiKey || apiKey.length < 10) {
-      utils.toast('Geçerli bir Gemini API anahtarı girin', 'warning');
+    const budget = parseFloat(document.getElementById('gemini-budget').value) || 200;
+    const rate = parseFloat(document.getElementById('gemini-usd-rate').value) || 45;
+    const model = document.getElementById('gemini-model')?.value || null;
+
+    // API key zorunlu değil — zaten aktifse sadece ayar güncellenebilir
+    if (apiKey && apiKey.length < 10) {
+      utils.toast('Geçerli bir Gemini API anahtarı girin (en az 10 karakter)', 'warning');
       return;
     }
+
     utils.setLoading('test-gemini', true, 'Test ediliyor...');
     try {
-      const budget = parseFloat(document.getElementById('gemini-budget').value) || 200;
-      const rate = parseFloat(document.getElementById('gemini-usd-rate').value) || 45;
-      const result = await api.updateGeminiConfig(apiKey, budget, rate);
+      const result = await api.updateGeminiConfig(apiKey || null, budget, rate, model);
       if (result.success) {
         utils.toast(`Gemini bağlandı! Model: ${result.model}`, 'success');
         this.loadGeminiConfig();
@@ -525,15 +547,19 @@ class FaturaBotApp {
 
   async saveGeminiConfig() {
     const apiKey = document.getElementById('gemini-api-key').value.trim();
-    if (!apiKey || apiKey.length < 10) {
-      utils.toast('Geçerli bir Gemini API anahtarı girin', 'warning');
+    const budget = parseFloat(document.getElementById('gemini-budget').value) || 200;
+    const rate = parseFloat(document.getElementById('gemini-usd-rate').value) || 45;
+    const model = document.getElementById('gemini-model')?.value || null;
+
+    // API key zorunlu değil — zaten aktifse sadece ayar güncellenebilir
+    if (apiKey && apiKey.length < 10) {
+      utils.toast('Geçerli bir Gemini API anahtarı girin (en az 10 karakter)', 'warning');
       return;
     }
+
     utils.setLoading('save-gemini', true, 'Kaydediliyor...');
     try {
-      const budget = parseFloat(document.getElementById('gemini-budget').value) || 200;
-      const rate = parseFloat(document.getElementById('gemini-usd-rate').value) || 45;
-      const result = await api.updateGeminiConfig(apiKey, budget, rate);
+      const result = await api.updateGeminiConfig(apiKey || null, budget, rate, model);
       if (result.success) {
         utils.toast('Gemini ayarları kaydedildi!', 'success');
         this.loadGeminiConfig();
@@ -1953,6 +1979,64 @@ class FaturaBotApp {
     if (this.state.notificationPollingInterval) {
       clearInterval(this.state.notificationPollingInterval);
       this.state.notificationPollingInterval = null;
+    }
+  }
+
+  /* BAĞLANTI GÖZETİCİSİ (Watchdog) — Her 10 saniyede health check */
+  startConnectionWatchdog() {
+    this.stopConnectionWatchdog();
+    this.state.connectionWatchdog = setInterval(() => this._checkConnection(), 10000);
+  }
+
+  stopConnectionWatchdog() {
+    if (this.state.connectionWatchdog) {
+      clearInterval(this.state.connectionWatchdog);
+      this.state.connectionWatchdog = null;
+    }
+  }
+
+  async _checkConnection() {
+    try {
+      await api.getHealth();
+      if (!this.state.apiReady) {
+        this.state.apiReady = true;
+        this.updateConnectionUI(true);
+        this.showDisconnectionOverlay(false);
+        utils.toast('Sunucu bağlantısı yeniden kuruldu!', 'success');
+        this.loadDashboardData();
+      }
+    } catch {
+      if (this.state.apiReady) {
+        this.state.apiReady = false;
+        this.updateConnectionUI(false);
+        this.showDisconnectionOverlay(true);
+        utils.toast('Sunucu bağlantısı kesildi!', 'error');
+      }
+    }
+  }
+
+  showDisconnectionOverlay(show) {
+    let overlay = document.getElementById('disconnection-overlay');
+    if (show) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'disconnection-overlay';
+        overlay.className = 'disconnection-overlay';
+        overlay.innerHTML = `
+          <div class="disconnection-overlay-content">
+            <i class="fas fa-unlink"></i>
+            <span>Sunucu bağlantısı kesildi</span>
+            <button class="btn btn-outline btn-sm" id="disconnection-reconnect-btn">
+              <i class="fas fa-plug"></i> Yeniden Bağlan
+            </button>
+          </div>
+        `;
+        document.querySelector('.content-area')?.prepend(overlay);
+        document.getElementById('disconnection-reconnect-btn')?.addEventListener('click', () => this.openApiModal());
+      }
+      overlay.classList.remove('hidden');
+    } else {
+      if (overlay) overlay.classList.add('hidden');
     }
   }
 

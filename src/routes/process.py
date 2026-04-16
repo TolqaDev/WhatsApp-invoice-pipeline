@@ -185,9 +185,12 @@ async def process_image(request: ImageProcessRequest):
         stats["total_errors"] += 1
         budget = gemini_service.budget
         add_error_record("BUDGET_EXCEEDED", f"Aylık bütçe doldu (₺{budget.month_cost_tl:.2f}/₺{budget.budget_tl:.2f})", sender, request_id)
+        # sender_jid: "whatsapp:905..." → "905..."
+        sender_jid = sender.replace("whatsapp:", "") if sender.startswith("whatsapp:") else None
         await notification_service.notify_gemini_failure(
             "BUDGET_EXCEEDED",
             f"₺{budget.month_cost_tl:.2f}/₺{budget.budget_tl:.2f}",
+            sender_jid=sender_jid,
         )
         raise HTTPException(status_code=429, detail={
             "success": False, "error_code": "BUDGET_EXCEEDED",
@@ -195,14 +198,16 @@ async def process_image(request: ImageProcessRequest):
     except GeminiRateLimitError:
         stats["total_errors"] += 1
         add_error_record("RATE_LIMITED", "Gemini API rate limit aşıldı", sender, request_id)
-        await notification_service.notify_gemini_failure("RATE_LIMITED", "Rate limit aşıldı")
+        sender_jid = sender.replace("whatsapp:", "") if sender.startswith("whatsapp:") else None
+        await notification_service.notify_gemini_failure("RATE_LIMITED", "Rate limit aşıldı", sender_jid=sender_jid)
         raise HTTPException(status_code=429, detail={
             "success": False, "error_code": "RATE_LIMITED",
             "message": "Gemini API rate limit aşıldı. Birkaç dakika bekleyin."})
     except GeminiUnavailableError:
         stats["total_errors"] += 1
         add_error_record("GEMINI_UNAVAILABLE", "AI servisi geçici olarak erişilemiyor", sender, request_id)
-        await notification_service.notify_gemini_failure("GEMINI_UNAVAILABLE", "Servis erişilemez")
+        sender_jid = sender.replace("whatsapp:", "") if sender.startswith("whatsapp:") else None
+        await notification_service.notify_gemini_failure("GEMINI_UNAVAILABLE", "Servis erişilemez", sender_jid=sender_jid)
         raise HTTPException(status_code=503, detail={
             "success": False, "error_code": "GEMINI_UNAVAILABLE",
             "message": "AI servisi geçici olarak erişilemiyor. Yönetici ile iletişime geçin."})

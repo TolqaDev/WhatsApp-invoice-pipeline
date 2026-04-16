@@ -652,3 +652,129 @@ class ExcelService:
             except Exception:
                 files.append({"date": f.stem, "file": f.name, "row_count": 0})
         return files
+
+    async def read_queries_from_excel(self, target_date: Optional[date] = None, limit: int = 50) -> list[dict]:
+        """Excel dosyasından sorgu satırlarını okur — bellekten bağımsız, restart'a dayanıklı."""
+        async with self._lock:
+            try:
+                path = self._daily_path(target_date)
+                if not path.exists():
+                    return []
+
+                wb = load_workbook(str(path), read_only=True)
+                sheet = self.SHEET_NAME if self.SHEET_NAME in wb.sheetnames else wb.sheetnames[0]
+                ws = wb[sheet]
+
+                # Tüm satırları oku, aynı fiş no'ya sahip satırları grupla
+                rows_data = []
+                for row in ws.iter_rows(min_row=2, values_only=False):
+                    vals = [cell.value for cell in row]
+                    if not any(vals):
+                        continue
+                    rows_data.append(vals)
+
+                wb.close()
+
+                if not rows_data:
+                    return []
+
+                # Fiş No bazında grupla — her fiş grubunun ilk satırı ana veriyi taşır
+                queries = []
+                i = 0
+                file_date = (target_date or date.today()).isoformat()
+                while i < len(rows_data):
+                    row = rows_data[i]
+                    fis_no = row[0] if len(row) > 0 else None
+                    tarih = row[1] if len(row) > 1 else None
+                    firma = row[2] if len(row) > 2 else None
+                    hesap_kodu = str(row[3]) if len(row) > 3 and row[3] else ""
+                    detay = str(row[6]) if len(row) > 6 and row[6] else ""
+                    borc = float(row[7]) if len(row) > 7 and row[7] else 0
+                    alacak = float(row[8]) if len(row) > 8 and row[8] else 0
+
+                    # Grup satırlarını topla (aynı fiş no)
+                    group_start = i
+                    group_borc_total = borc
+                    group_alacak_total = alacak
+                    kdv_tutar = 0
+                    matrah = 0
+                    kdv_oran = ""
+                    masraf = ""
+                    odeme = ""
+                    toplam = 0
+
+                    # Ana satır masraf türü tespit
+                    if hesap_kodu.startswith("770"):
+                        masraf = detay.split(" Gideri")[0].strip() if " Gideri" in detay else detay
+                        matrah = borc
+
+                    j = i + 1
+                    while j < len(rows_data) and rows_data[j][0] == fis_no:
+                        r = rows_data[j]
+                        r_hesap = str(r[3]) if len(r) > 3 and r[3] else ""
+                        r_detay = str(r[6]) if len(r) > 6 and r[6] else ""
+                        r_borc = float(r[7]) if len(r) > 7 and r[7] else 0
+                        r_alacak = float(r[8]) if len(r) > 8 and r[8] else 0
+                        group_borc_total += r_borc
+                        group_alacak_total += r_alacak
+
+                        if r_hesap.startswith("191"):
+                            kdv_tutar += r_borc
+                            # KDV oranını detaydan çıkar
+                            import re
+                            m = re.search(r'%\d+', r_detay)
+                            if m:
+                                kdv_oran = m.group(0)
+                        elif r_hesap.startswith("100") or r_hesap.startswith("102"):
+                            toplam = r_alacak
+                            if r_hesap.startswith("100"):
+                                odeme = "NAKİT"
+                            else:
+                                odeme = "KART"
+                        elif r_hesap.startswith("770") and not masraf:
+                            masraf = r_detay.split(" Gideri")[0].strip() if " Gideri" in r_detay else r_detay
+                            matrah = r_borc
+
+                        j += 1
+
+                    if toplam == 0:
+                        toplam = group_alacak_total
+
+                    # Belge türünden ödeme tespiti
+                    belge_tr = str(rows_data[i][10]) if len(rows_data[i]) > 10 and rows_data[i][10] else ""
+                    if not odeme:
+                        if "Kasa" in belge_tr or "Fiş" in belge_tr:
+                            odeme = "NAKİT"
+                        elif "Banka" in belge_tr or "Dekont" in belge_tr:
+                            odeme = "KART"
+
+                    queries.append({
+                        "request_id": f"excel_{file_date}_{group_start + 2}",
+                        "timestamp": f"{file_date}T00:00:00Z",
+                        "firma": firma,
+                        "toplam": round(toplam, 2),
+                        "confidence": 100,
+                        "source": "excel",
+                        "processing_time_ms": 0,
+                        "masraf": masraf,
+                        "tarih": tarih,
+                        "odeme": odeme,
+                        "fis_no": fis_no,
+                        "vkn": None,
+                        "matrah": round(matrah, 2),
+                        "kdv_oran": kdv_oran,
+                        "kdv_tutar": round(kdv_tutar, 2),
+                        "status": "success",
+                        "row_number": group_start + 2,
+                        "file_date": file_date,
+                    })
+
+                    i = j
+
+                queries.reverse()  # En yeni en üstte
+                return queries[:limit]
+
+            except Exception as e:
+                logger.error("Excel sorgu okuma hatası", event="excel_read_queries_error", error=str(e))
+                return []
+

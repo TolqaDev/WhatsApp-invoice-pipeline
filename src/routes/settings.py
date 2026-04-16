@@ -77,8 +77,8 @@ async def update_gemini_config(req: GeminiConfigRequest):
             if req.model:
                 gemini_service.set_model(req.model)
             if gemini_service.budget:
-                gemini_service.budget.budget_tl = budget_tl
-                gemini_service.budget.usd_tl_rate = usd_rate
+                gemini_service.budget._budget_tl = budget_tl
+                gemini_service.budget._usd_tl_rate = usd_rate
         else:
             raise ValueError("Gemini aktif değil, API anahtarı gerekli")
 

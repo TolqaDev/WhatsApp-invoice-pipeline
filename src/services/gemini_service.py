@@ -179,6 +179,26 @@ class GeminiService:
             return True
         return False
 
+    def _build_config(self) -> types.GenerateContentConfig:
+        """Model özelliklerine göre GenerateContentConfig oluşturur."""
+        model_info = self.AVAILABLE_MODELS.get(self._model_name, {})
+        has_thinking = model_info.get("thinking", 0) > 0
+
+        config_kwargs = {
+            "temperature": 0.1,
+            "max_output_tokens": 2048,
+            "response_mime_type": "application/json",
+        }
+
+        if has_thinking:
+            # Thinking destekleyen modeller — minimum budget ver (0 kabul etmiyorlar)
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=1024)
+        else:
+            # Thinking desteği olmayan modeller
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+
+        return types.GenerateContentConfig(**config_kwargs)
+
     @property
     def is_active(self) -> bool:
         return self._client is not None
@@ -214,12 +234,7 @@ class GeminiService:
                         ]
                     )
                 ],
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=2048,
-                    response_mime_type="application/json",
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
+                config=self._build_config(),
             )
 
             raw_text = response.text
